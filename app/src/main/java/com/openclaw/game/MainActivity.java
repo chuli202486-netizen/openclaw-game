@@ -1,14 +1,20 @@
 package com.openclaw.game;
 
 import android.app.Activity;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -43,6 +49,10 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private static final int INK = Color.rgb(43, 35, 28);
     private static final int WHITE = Color.WHITE;
     private static final int CARD_RED = Color.rgb(195, 41, 38);
+    private static final int CHESS_WOOD = Color.rgb(184, 125, 57);
+    private static final int CHESS_WOOD_LIGHT = Color.rgb(242, 204, 127);
+    private static final int CHESS_RED = Color.rgb(185, 32, 31);
+    private static final int CHESS_BLACK = Color.rgb(36, 36, 32);
 
     private final GameClient client = new GameClient();
     private final Set<String> selectedCards = new HashSet<>();
@@ -50,6 +60,8 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     private SharedPreferences preferences;
     private JSONObject snapshot;
+    private JSONObject chessSnapshot;
+    private JSONObject pendingAfterConnectMessage;
     private boolean connected;
     private String activeScreen = "home";
     private String playerId = "";
@@ -58,6 +70,15 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private EditText nameInput;
     private EditText serverInput;
     private EditText roomCodeInput;
+    private EditText chessRoomCodeInput;
+    private String[][] chessBoard;
+    private final List<String[][]> chessHistory = new ArrayList<>();
+    private final List<Boolean> chessTurnHistory = new ArrayList<>();
+    private boolean chessRedTurn = true;
+    private boolean chessEnded = false;
+    private int selectedChessRow = -1;
+    private int selectedChessCol = -1;
+    private String chessNotice = "红方先行";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,6 +99,13 @@ public class MainActivity extends Activity implements GameClient.Listener {
     }
 
     @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        enterImmersiveMode();
+        redrawCurrentScreen();
+    }
+
+    @Override
     protected void onDestroy() {
         client.close();
         super.onDestroy();
@@ -85,6 +113,15 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     @Override
     public void onBackPressed() {
+        if ("chess".equals(activeScreen)) {
+            if (chessSnapshot != null) {
+                sendChessType("leaveRoom");
+                chessSnapshot = null;
+                resetChineseChess();
+            }
+            renderHome();
+            return;
+        }
         if ("game".equals(activeScreen)) {
             renderLobby();
             return;
@@ -105,6 +142,18 @@ public class MainActivity extends Activity implements GameClient.Listener {
         put(hello, "name", getPlayerName());
         put(hello, "resumeId", preferences.getString("playerId", ""));
         client.send(hello);
+        if (pendingAfterConnectMessage != null) {
+            final JSONObject pending = pendingAfterConnectMessage;
+            pendingAfterConnectMessage = null;
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    client.send(pending);
+                }
+            }, 250);
+            renderChineseChess();
+            return;
+        }
         renderLobby();
     }
 
@@ -126,6 +175,14 @@ public class MainActivity extends Activity implements GameClient.Listener {
             renderGame();
             return;
         }
+        if ("chessSnapshot".equals(type)) {
+            chessSnapshot = message;
+            playerId = message.optString("you", playerId);
+            preferences.edit().putString("playerId", playerId).apply();
+            applyChineseChessSnapshot(message);
+            renderChineseChess();
+            return;
+        }
         if ("notice".equals(type) || "error".equals(type)) {
             lastNotice = message.optString("message", "");
             if ("error".equals(type)) {
@@ -144,8 +201,9 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     private void renderHome() {
         activeScreen = "home";
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         LinearLayout root = landscapeShell();
-        root.addView(sideBrand("OpenClaw", "横屏联机游戏平台", "斗地主已开放"));
+        root.addView(sideBrand("OpenClaw", "横屏联机游戏平台", "斗地主 / 象棋已开放"));
 
         LinearLayout content = contentArea();
         LinearLayout connection = glassPanel();
@@ -202,7 +260,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
         LinearLayout games = row();
         games.addView(gameTile("斗地主", "横屏牌桌", true), weightParams(2, gameTileHeight()));
-        games.addView(gameTile("中国象棋", "预留", false), weightParams(1, gameTileHeight()));
+        games.addView(gameTile("中国象棋", "竖屏棋桌", true), weightParams(1, gameTileHeight()));
         games.addView(gameTile("广东麻将", "预留", false), weightParams(1, gameTileHeight()));
         games.addView(gameTile("画我猜", "预留", false), weightParams(1, gameTileHeight()));
         games.addView(gameTile("谁是卧底", "预留", false), weightParams(1, gameTileHeight()));
@@ -217,6 +275,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     private void renderLobby() {
         activeScreen = "lobby";
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         LinearLayout root = landscapeShell();
         root.addView(sideBrand("斗地主", connected ? "已连接服务器" : "未连接服务器", connected ? "好友房 / 机器人测试" : "返回首页连接"));
 
@@ -280,6 +339,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     private void renderGame() {
         activeScreen = "game";
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         JSONObject room = snapshot == null ? null : snapshot.optJSONObject("room");
         if (room == null) {
             renderLobby();
@@ -301,6 +361,477 @@ public class MainActivity extends Activity implements GameClient.Listener {
         root.addView(floatingActions(room), floatingRightParams());
 
         setContentView(root);
+    }
+
+    private void renderChineseChess() {
+        activeScreen = "chess";
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        if (chessBoard == null) {
+            resetChineseChess();
+        }
+        final JSONObject chessRoom = chessSnapshot == null ? null : chessSnapshot.optJSONObject("room");
+        final boolean online = chessRoom != null;
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(12), dp(12), dp(12), dp(10));
+        root.setBackground(chessBackground());
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.VERTICAL);
+        top.setPadding(dp(12), dp(10), dp(12), dp(10));
+        top.setBackground(round(Color.argb(180, 81, 44, 21), dp(14), Color.argb(130, 255, 226, 158), dp(1)));
+        TextView header = title("中国象棋", 25, Color.rgb(255, 238, 196));
+        header.setGravity(Gravity.CENTER);
+        top.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+        TextView state = smallPill(chessStatusText(chessRoom),
+                Color.argb(215, 255, 238, 184), INK);
+        LinearLayout.LayoutParams stateParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34));
+        stateParams.setMargins(0, dp(8), 0, 0);
+        top.addView(state, stateParams);
+        if (online) {
+            LinearLayout onlineRow = row();
+            onlineRow.setPadding(0, dp(8), 0, 0);
+            if ("waiting".equals(chessRoom.optString("status"))) {
+                Button bot = outlineButton("补人机");
+                bot.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        sendChessType("addChessBot");
+                    }
+                });
+                onlineRow.addView(bot, weightParams(1, chessActionHeight()));
+            }
+            Button leave = outlineButton("离开房间");
+            leave.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    sendChessType("leaveRoom");
+                    chessSnapshot = null;
+                    resetChineseChess();
+                    renderChineseChess();
+                }
+            });
+            onlineRow.addView(leave, weightParams(1, chessActionHeight()));
+            top.addView(onlineRow);
+        } else {
+            chessRoomCodeInput = edit("输入房间号", "");
+            chessRoomCodeInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+            top.addView(chessRoomCodeInput);
+            LinearLayout onlineRow = row();
+            Button create = actionButton("联机开房", ORANGE);
+            create.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    sendChessType("createChessRoom");
+                }
+            });
+            onlineRow.addView(create, weightParams(1, chessActionHeight()));
+            Button join = outlineButton("加入房间");
+            join.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    JSONObject message = new JSONObject();
+                    put(message, "type", "joinChessRoom");
+                    put(message, "code", chessRoomCodeInput.getText().toString().trim());
+                    sendChessMessage(message);
+                }
+            });
+            onlineRow.addView(join, weightParams(1, chessActionHeight()));
+            top.addView(onlineRow);
+        }
+        root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        ChineseChessBoardView chessView = new ChineseChessBoardView();
+        LinearLayout.LayoutParams boardParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, chineseChessBoardHeight());
+        boardParams.setMargins(0, dp(10), 0, dp(10));
+        root.addView(chessView, boardParams);
+
+        LinearLayout actions = row();
+        actions.setPadding(0, 0, 0, 0);
+        Button restart = actionButton("重开", ORANGE);
+        restart.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (online) {
+                    sendChessType("chessRestart");
+                } else {
+                    resetChineseChess();
+                    renderChineseChess();
+                }
+            }
+        });
+        actions.addView(restart, weightParams(1, chessActionHeight()));
+
+        Button undo = outlineButton("悔棋");
+        undo.setEnabled(online ? chessRoom.optInt("historyCount", 0) > 0 : !chessHistory.isEmpty());
+        undo.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (online) {
+                    sendChessType("chessUndo");
+                } else {
+                    undoChineseChess();
+                }
+            }
+        });
+        actions.addView(undo, weightParams(1, chessActionHeight()));
+
+        Button back = outlineButton("返回平台");
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                renderHome();
+            }
+        });
+        actions.addView(back, weightParams(1, chessActionHeight()));
+        root.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, chessActionHeight() + dp(10)));
+
+        setContentView(root);
+    }
+
+    private void resetChineseChess() {
+        chessBoard = new String[10][9];
+        String[] blackBack = {"車", "馬", "象", "士", "将", "士", "象", "馬", "車"};
+        String[] redBack = {"车", "马", "相", "仕", "帅", "仕", "相", "马", "车"};
+        for (int col = 0; col < 9; col++) {
+            chessBoard[0][col] = blackBack[col];
+            chessBoard[9][col] = redBack[col];
+        }
+        chessBoard[2][1] = "砲";
+        chessBoard[2][7] = "砲";
+        chessBoard[7][1] = "炮";
+        chessBoard[7][7] = "炮";
+        for (int col = 0; col < 9; col += 2) {
+            chessBoard[3][col] = "卒";
+            chessBoard[6][col] = "兵";
+        }
+        chessRedTurn = true;
+        chessEnded = false;
+        chessHistory.clear();
+        chessTurnHistory.clear();
+        selectedChessRow = -1;
+        selectedChessCol = -1;
+        chessNotice = "红方先行";
+    }
+
+    private void applyChineseChessSnapshot(JSONObject message) {
+        JSONObject room = message.optJSONObject("room");
+        JSONArray board = room == null ? null : room.optJSONArray("board");
+        if (board == null) {
+            return;
+        }
+        chessBoard = new String[10][9];
+        for (int row = 0; row < 10; row++) {
+            JSONArray line = board.optJSONArray(row);
+            for (int col = 0; col < 9; col++) {
+                if (line != null && !line.isNull(col)) {
+                    String piece = line.optString(col);
+                    chessBoard[row][col] = piece.length() == 0 ? null : piece;
+                }
+            }
+        }
+        chessRedTurn = room.optString("turnColor", "red").equals("red");
+        chessEnded = "ended".equals(room.optString("status"));
+        selectedChessRow = -1;
+        selectedChessCol = -1;
+        chessNotice = message.optString("message", chessNotice);
+    }
+
+    private String chessStatusText(JSONObject room) {
+        if (room == null) {
+            return chessEnded ? chessNotice : (chessRedTurn ? "红方回合" : "黑方回合") + "  ·  " + chessNotice;
+        }
+        String status = room.optString("status");
+        String code = room.optString("code");
+        if ("waiting".equals(status)) {
+            int count = room.optJSONArray("players") == null ? 0 : room.optJSONArray("players").length();
+            return "房间 " + code + "  ·  等待对手 " + count + "/2";
+        }
+        if ("ended".equals(status)) {
+            return "房间 " + code + "  ·  " + room.optString("winnerName", "本局结束");
+        }
+        String side = room.optString("turnColor", "red").equals("red") ? "红方" : "黑方";
+        String mine = playerId.equals(room.optString("turnPlayerId")) ? "轮到你" : "等待对手";
+        return "房间 " + code + "  ·  " + side + "回合  ·  " + mine;
+    }
+
+    private boolean isMyOnlineChessPiece(String piece, JSONObject room) {
+        boolean redPiece = isRedPiece(piece);
+        String sidePlayerId = redPiece ? room.optString("redPlayerId") : room.optString("blackPlayerId");
+        return playerId.equals(sidePlayerId);
+    }
+
+    private void sendChessType(String type) {
+        JSONObject message = new JSONObject();
+        put(message, "type", type);
+        sendChessMessage(message);
+    }
+
+    private void sendChessMessage(JSONObject message) {
+        if (connected) {
+            client.send(message);
+            return;
+        }
+        pendingAfterConnectMessage = message;
+        String server = preferences.getString("server", DEFAULT_SERVER);
+        client.connect(server, MainActivity.this);
+        Toast.makeText(this, "正在连接服务器", Toast.LENGTH_SHORT).show();
+    }
+
+    private void handleChessTap(int row, int col) {
+        if (chessSnapshot != null) {
+            handleOnlineChessTap(row, col);
+            return;
+        }
+        if (chessEnded || !insideBoard(row, col)) {
+            return;
+        }
+        String piece = chessBoard[row][col];
+        if (selectedChessRow < 0) {
+            if (piece == null) {
+                chessNotice = "请选择要走的棋子";
+            } else if (isRedPiece(piece) != chessRedTurn) {
+                chessNotice = chessRedTurn ? "现在轮到红方" : "现在轮到黑方";
+            } else {
+                selectedChessRow = row;
+                selectedChessCol = col;
+                chessNotice = "已选中 " + piece;
+            }
+            renderChineseChess();
+            return;
+        }
+
+        String selected = chessBoard[selectedChessRow][selectedChessCol];
+        if (piece != null && isRedPiece(piece) == chessRedTurn) {
+            selectedChessRow = row;
+            selectedChessCol = col;
+            chessNotice = "已改选 " + piece;
+            renderChineseChess();
+            return;
+        }
+
+        if (!legalChineseChessMove(selectedChessRow, selectedChessCol, row, col)) {
+            chessNotice = "这一步不符合象棋规则";
+            renderChineseChess();
+            return;
+        }
+
+        String captured = chessBoard[row][col];
+        String[][] beforeBoard = copyChineseChessBoard(chessBoard);
+        boolean beforeTurn = chessRedTurn;
+        chessBoard[row][col] = selected;
+        chessBoard[selectedChessRow][selectedChessCol] = null;
+        if (generalsFaceEachOther()) {
+            chessBoard[selectedChessRow][selectedChessCol] = selected;
+            chessBoard[row][col] = captured;
+            chessNotice = "将帅不能直接照面";
+            renderChineseChess();
+            return;
+        }
+        chessHistory.add(beforeBoard);
+        chessTurnHistory.add(beforeTurn);
+        selectedChessRow = -1;
+        selectedChessCol = -1;
+        if ("帅".equals(captured) || "将".equals(captured)) {
+            chessEnded = true;
+            chessNotice = (chessRedTurn ? "红方" : "黑方") + "获胜";
+        } else {
+            chessRedTurn = !chessRedTurn;
+            chessNotice = captured == null ? "落子完成" : "吃掉 " + captured;
+        }
+        renderChineseChess();
+    }
+
+    private void handleOnlineChessTap(int row, int col) {
+        JSONObject room = chessSnapshot == null ? null : chessSnapshot.optJSONObject("room");
+        if (room == null || !"playing".equals(room.optString("status")) || !insideBoard(row, col)) {
+            return;
+        }
+        if (!playerId.equals(room.optString("turnPlayerId"))) {
+            chessNotice = "还没轮到你";
+            renderChineseChess();
+            return;
+        }
+        String piece = chessBoard[row][col];
+        if (selectedChessRow < 0) {
+            if (piece == null) {
+                chessNotice = "请选择要走的棋子";
+            } else if (!isMyOnlineChessPiece(piece, room)) {
+                chessNotice = "请选择自己的棋子";
+            } else {
+                selectedChessRow = row;
+                selectedChessCol = col;
+                chessNotice = "已选中 " + piece;
+            }
+            renderChineseChess();
+            return;
+        }
+        if (piece != null && isMyOnlineChessPiece(piece, room)) {
+            selectedChessRow = row;
+            selectedChessCol = col;
+            chessNotice = "已改选 " + piece;
+            renderChineseChess();
+            return;
+        }
+        if (!legalChineseChessMove(selectedChessRow, selectedChessCol, row, col)) {
+            chessNotice = "这一步不符合象棋规则";
+            renderChineseChess();
+            return;
+        }
+        JSONObject message = new JSONObject();
+        put(message, "type", "chessMove");
+        put(message, "fromRow", selectedChessRow);
+        put(message, "fromCol", selectedChessCol);
+        put(message, "toRow", row);
+        put(message, "toCol", col);
+        selectedChessRow = -1;
+        selectedChessCol = -1;
+        sendChessMessage(message);
+    }
+
+    private void undoChineseChess() {
+        int last = chessHistory.size() - 1;
+        if (last < 0) {
+            chessNotice = "当前没有可悔棋的步数";
+            renderChineseChess();
+            return;
+        }
+        chessBoard = chessHistory.remove(last);
+        chessRedTurn = chessTurnHistory.remove(last);
+        chessEnded = false;
+        selectedChessRow = -1;
+        selectedChessCol = -1;
+        chessNotice = "已悔棋，" + (chessRedTurn ? "红方" : "黑方") + "继续";
+        renderChineseChess();
+    }
+
+    private String[][] copyChineseChessBoard(String[][] board) {
+        String[][] copy = new String[10][9];
+        for (int row = 0; row < 10; row++) {
+            System.arraycopy(board[row], 0, copy[row], 0, 9);
+        }
+        return copy;
+    }
+
+    private boolean legalChineseChessMove(int fromRow, int fromCol, int toRow, int toCol) {
+        if (!insideBoard(fromRow, fromCol) || !insideBoard(toRow, toCol)) {
+            return false;
+        }
+        String piece = chessBoard[fromRow][fromCol];
+        if (piece == null || fromRow == toRow && fromCol == toCol) {
+            return false;
+        }
+        String target = chessBoard[toRow][toCol];
+        boolean red = isRedPiece(piece);
+        if (target != null && isRedPiece(target) == red) {
+            return false;
+        }
+        int rowDelta = toRow - fromRow;
+        int colDelta = toCol - fromCol;
+        int absRow = Math.abs(rowDelta);
+        int absCol = Math.abs(colDelta);
+
+        if ("帅".equals(piece) || "将".equals(piece)) {
+            if (fromCol == toCol && target != null && isGeneral(target) && clearStraight(fromRow, fromCol, toRow, toCol)) {
+                return true;
+            }
+            return inPalace(toRow, toCol, red) && absRow + absCol == 1;
+        }
+        if ("仕".equals(piece) || "士".equals(piece)) {
+            return inPalace(toRow, toCol, red) && absRow == 1 && absCol == 1;
+        }
+        if ("相".equals(piece) || "象".equals(piece)) {
+            int eyeRow = (fromRow + toRow) / 2;
+            int eyeCol = (fromCol + toCol) / 2;
+            boolean sameSide = red ? toRow >= 5 : toRow <= 4;
+            return sameSide && absRow == 2 && absCol == 2 && chessBoard[eyeRow][eyeCol] == null;
+        }
+        if ("马".equals(piece) || "馬".equals(piece)) {
+            if (!((absRow == 2 && absCol == 1) || (absRow == 1 && absCol == 2))) {
+                return false;
+            }
+            int legRow = fromRow + (absRow == 2 ? rowDelta / 2 : 0);
+            int legCol = fromCol + (absCol == 2 ? colDelta / 2 : 0);
+            return chessBoard[legRow][legCol] == null;
+        }
+        if ("车".equals(piece) || "車".equals(piece)) {
+            return clearStraight(fromRow, fromCol, toRow, toCol);
+        }
+        if ("炮".equals(piece) || "砲".equals(piece)) {
+            int screens = countBetween(fromRow, fromCol, toRow, toCol);
+            return target == null ? screens == 0 : screens == 1;
+        }
+        if ("兵".equals(piece) || "卒".equals(piece)) {
+            int forward = red ? -1 : 1;
+            if (rowDelta == forward && colDelta == 0) {
+                return true;
+            }
+            boolean crossedRiver = red ? fromRow <= 4 : fromRow >= 5;
+            return crossedRiver && rowDelta == 0 && absCol == 1;
+        }
+        return false;
+    }
+
+    private boolean insideBoard(int row, int col) {
+        return row >= 0 && row < 10 && col >= 0 && col < 9;
+    }
+
+    private boolean isRedPiece(String piece) {
+        return "车马相仕帅炮兵".contains(piece);
+    }
+
+    private boolean isGeneral(String piece) {
+        return "帅".equals(piece) || "将".equals(piece);
+    }
+
+    private boolean inPalace(int row, int col, boolean red) {
+        return col >= 3 && col <= 5 && (red ? row >= 7 && row <= 9 : row >= 0 && row <= 2);
+    }
+
+    private boolean generalsFaceEachOther() {
+        int redRow = -1;
+        int redCol = -1;
+        int blackRow = -1;
+        int blackCol = -1;
+        for (int row = 0; row < 10; row++) {
+            for (int col = 0; col < 9; col++) {
+                if ("帅".equals(chessBoard[row][col])) {
+                    redRow = row;
+                    redCol = col;
+                } else if ("将".equals(chessBoard[row][col])) {
+                    blackRow = row;
+                    blackCol = col;
+                }
+            }
+        }
+        if (redCol < 0 || redCol != blackCol) {
+            return false;
+        }
+        return countBetween(blackRow, blackCol, redRow, redCol) == 0;
+    }
+
+    private boolean clearStraight(int fromRow, int fromCol, int toRow, int toCol) {
+        return countBetween(fromRow, fromCol, toRow, toCol) == 0;
+    }
+
+    private int countBetween(int fromRow, int fromCol, int toRow, int toCol) {
+        if (fromRow != toRow && fromCol != toCol) {
+            return -1;
+        }
+        int count = 0;
+        int rowStep = Integer.compare(toRow, fromRow);
+        int colStep = Integer.compare(toCol, fromCol);
+        int row = fromRow + rowStep;
+        int col = fromCol + colStep;
+        while (row != toRow || col != toCol) {
+            if (chessBoard[row][col] != null) {
+                count += 1;
+            }
+            row += rowStep;
+            col += colStep;
+        }
+        return count;
     }
 
     private View topSeats(JSONObject room) {
@@ -637,6 +1168,131 @@ public class MainActivity extends Activity implements GameClient.Listener {
         return null;
     }
 
+    private class ChineseChessBoardView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        ChineseChessBoardView() {
+            super(MainActivity.this);
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int width = getWidth();
+            int height = getHeight();
+            int cellX = Math.max(1, (int) (width / 9.15f));
+            int cellY = Math.max(1, Math.min((int) (cellX * 1.26f), (int) (height / 9.32f)));
+            int actualWidth = cellX * 8;
+            int actualHeight = cellY * 9;
+            int left = (width - actualWidth) / 2;
+            int top = Math.max(dp(6), Math.min((height - actualHeight) / 2, dp(28)));
+            int right = left + actualWidth;
+            int bottom = top + actualHeight;
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(231, 174, 90));
+            RectF boardRect = new RectF(left - dp(11), top - dp(11), right + dp(11), bottom + dp(11));
+            canvas.drawRoundRect(boardRect, dp(16), dp(16), paint);
+            paint.setColor(Color.rgb(252, 218, 144));
+            RectF innerRect = new RectF(left - dp(5), top - dp(5), right + dp(5), bottom + dp(5));
+            canvas.drawRoundRect(innerRect, dp(10), dp(10), paint);
+
+            drawChessGrid(canvas, left, top, cellX, cellY);
+            drawSelectedPoint(canvas, left, top, cellX, cellY);
+            drawChessPieces(canvas, left, top, cellX, cellY);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (event.getAction() != MotionEvent.ACTION_UP) {
+                return true;
+            }
+            int width = getWidth();
+            int height = getHeight();
+            int cellX = Math.max(1, (int) (width / 9.15f));
+            int cellY = Math.max(1, Math.min((int) (cellX * 1.26f), (int) (height / 9.32f)));
+            int actualWidth = cellX * 8;
+            int actualHeight = cellY * 9;
+            int left = (width - actualWidth) / 2;
+            int top = Math.max(dp(6), Math.min((height - actualHeight) / 2, dp(28)));
+            int col = Math.round((event.getX() - left) / cellX);
+            int row = Math.round((event.getY() - top) / cellY);
+            handleChessTap(row, col);
+            return true;
+        }
+
+        private void drawChessGrid(Canvas canvas, int left, int top, int cellX, int cellY) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(Color.rgb(89, 50, 25));
+            for (int row = 0; row < 10; row++) {
+                int y = top + row * cellY;
+                canvas.drawLine(left, y, left + cellX * 8, y, paint);
+            }
+            for (int col = 0; col < 9; col++) {
+                int x = left + col * cellX;
+                canvas.drawLine(x, top, x, top + cellY * 4, paint);
+                canvas.drawLine(x, top + cellY * 5, x, top + cellY * 9, paint);
+            }
+            canvas.drawLine(left + cellX * 3, top, left + cellX * 5, top + cellY * 2, paint);
+            canvas.drawLine(left + cellX * 5, top, left + cellX * 3, top + cellY * 2, paint);
+            canvas.drawLine(left + cellX * 3, top + cellY * 7, left + cellX * 5, top + cellY * 9, paint);
+            canvas.drawLine(left + cellX * 5, top + cellY * 7, left + cellX * 3, top + cellY * 9, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(Math.max(dp(18), cellX * 0.36f));
+            paint.setColor(Color.argb(160, 96, 52, 24));
+            Paint.FontMetrics metrics = paint.getFontMetrics();
+            float base = top + cellY * 4.5f - (metrics.ascent + metrics.descent) / 2;
+            canvas.drawText("楚河", left + cellX * 2.2f, base, paint);
+            canvas.drawText("汉界", left + cellX * 5.8f, base, paint);
+        }
+
+        private void drawSelectedPoint(Canvas canvas, int left, int top, int cellX, int cellY) {
+            if (selectedChessRow < 0) {
+                return;
+            }
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(120, 255, 236, 96));
+            canvas.drawCircle(left + selectedChessCol * cellX, top + selectedChessRow * cellY, cellX * 0.48f, paint);
+        }
+
+        private void drawChessPieces(Canvas canvas, int left, int top, int cellX, int cellY) {
+            for (int row = 0; row < 10; row++) {
+                for (int col = 0; col < 9; col++) {
+                    String piece = chessBoard == null ? null : chessBoard[row][col];
+                    if (piece == null) {
+                        continue;
+                    }
+                    drawPiece(canvas, piece, left + col * cellX, top + row * cellY, cellX);
+                }
+            }
+        }
+
+        private void drawPiece(Canvas canvas, String piece, int cx, int cy, int cell) {
+            float radius = cell * 0.42f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(80, 30, 20, 10));
+            canvas.drawCircle(cx + dp(2), cy + dp(3), radius, paint);
+            paint.setColor(Color.rgb(255, 240, 198));
+            canvas.drawCircle(cx, cy, radius, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(isRedPiece(piece) ? CHESS_RED : CHESS_BLACK);
+            canvas.drawCircle(cx, cy, radius - dp(3), paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(Math.max(dp(23), cell * 0.48f));
+            paint.setColor(isRedPiece(piece) ? CHESS_RED : CHESS_BLACK);
+            Paint.FontMetrics metrics = paint.getFontMetrics();
+            canvas.drawText(piece, cx, cy - (metrics.ascent + metrics.descent) / 2, paint);
+        }
+    }
+
     private LinearLayout landscapeShell() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.HORIZONTAL);
@@ -709,13 +1365,20 @@ public class MainActivity extends Activity implements GameClient.Listener {
         tile.setGravity(Gravity.CENTER);
         tile.setPadding(dp(10), dp(10), dp(10), dp(10));
         tile.setBackground(round(enabled ? Color.argb(215, 255, 245, 213) : Color.argb(120, 230, 235, 226), dp(16), Color.argb(130, 255, 255, 255), dp(1)));
-        tile.addView(title(title, enabled ? 26 : 19, enabled ? INK : Color.rgb(101, 120, 108)));
+        TextView tileTitle = title(title, enabled ? ("中国象棋".equals(title) ? 22 : 26) : 19, enabled ? INK : Color.rgb(101, 120, 108));
+        tileTitle.setSingleLine(true);
+        tileTitle.setGravity(Gravity.CENTER);
+        tile.addView(tileTitle);
         tile.addView(caption(state, enabled ? ORANGE : Color.rgb(126, 142, 130)));
         if (enabled) {
             tile.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
-                    renderLobby();
+                    if ("中国象棋".equals(title)) {
+                        renderChineseChess();
+                    } else {
+                        renderLobby();
+                    }
                 }
             });
         }
@@ -862,6 +1525,13 @@ public class MainActivity extends Activity implements GameClient.Listener {
         return drawable;
     }
 
+    private GradientDrawable chessBackground() {
+        GradientDrawable drawable = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.rgb(91, 46, 24), CHESS_WOOD, CHESS_WOOD_LIGHT});
+        drawable.setDither(true);
+        return drawable;
+    }
+
     private String statusText(JSONObject room) {
         String status = room.optString("status");
         if ("waiting".equals(status)) {
@@ -991,6 +1661,8 @@ public class MainActivity extends Activity implements GameClient.Listener {
             public void run() {
                 if ("game".equals(activeScreen) && snapshot != null) {
                     renderGame();
+                } else if ("chess".equals(activeScreen)) {
+                    renderChineseChess();
                 } else if ("lobby".equals(activeScreen)) {
                     renderLobby();
                 } else {
@@ -1101,6 +1773,22 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     private int settlementHeight() {
         return compactHeight(dp(78), dp(92));
+    }
+
+    private int chessTopHeight() {
+        return clamp(screenHeightPx() / 9, dp(86), dp(112));
+    }
+
+    private int chessActionHeight() {
+        return clamp(screenHeightPx() / 15, dp(46), dp(58));
+    }
+
+    private int chineseChessBoardHeight() {
+        int shortest = Math.min(screenWidthPx(), screenHeightPx());
+        int cellX = Math.max(1, (int) (shortest / 9.15f));
+        int wanted = (int) (cellX * 9 * 1.26f) + dp(34);
+        int max = Math.max(dp(620), screenHeightPx() - chessTopHeight() - chessActionHeight() - dp(56));
+        return clamp(wanted, dp(560), max);
     }
 
     private int infoRowHeight() {

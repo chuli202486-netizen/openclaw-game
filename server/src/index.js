@@ -44,10 +44,10 @@ wss.on("connection", (ws) => {
     handleDisconnect(player);
   });
 
-  send(player, { type: "notice", message: "欢迎来到 OpenClaw 斗地主服务器" });
+  send(player, { type: "notice", message: "欢迎来到 OpenClaw 联机服务器" });
 });
 
-console.log(`OpenClaw Dou Dizhu server listening on ws://0.0.0.0:${PORT}`);
+console.log(`OpenClaw game server listening on ws://0.0.0.0:${PORT}`);
 
 function handleMessage(player, message) {
   switch (message.type) {
@@ -55,10 +55,13 @@ function handleMessage(player, message) {
       resumePlayer(player, message);
       break;
     case "createRoom":
-      joinRoom(player, createRoom("friend"));
+      joinRoom(player, createRoom("friend", "doudizhu"));
+      break;
+    case "createChessRoom":
+      joinRoom(player, createRoom("friend", "chess"));
       break;
     case "quickJoin":
-      joinRoom(player, findJoinableRoom("friend") || createRoom("friend"));
+      joinRoom(player, findJoinableRoom("friend", "doudizhu") || createRoom("friend", "doudizhu"));
       break;
     case "goldMatch":
       goldMatch(player);
@@ -66,8 +69,23 @@ function handleMessage(player, message) {
     case "joinRoom":
       joinRoomByCode(player, message.code);
       break;
+    case "joinChessRoom":
+      joinChessRoomByCode(player, message.code);
+      break;
     case "leaveRoom":
       leaveRoom(player, false);
+      break;
+    case "addChessBot":
+      addChessBot(player);
+      break;
+    case "chessMove":
+      moveChess(player, message);
+      break;
+    case "chessUndo":
+      undoChess(player);
+      break;
+    case "chessRestart":
+      restartChess(player);
       break;
     case "addBot":
       addBot(player);
@@ -134,6 +152,11 @@ function handleDisconnect(player) {
     players.delete(player.id);
     return;
   }
+  if (room.game === "chess") {
+    leaveRoom(player, true);
+    players.delete(player.id);
+    return;
+  }
   if (room.status === "waiting" || room.status === "ended") {
     leaveRoom(player, true);
     players.delete(player.id);
@@ -164,7 +187,7 @@ function toggleAuto(player, enabled) {
   scheduleBot(room);
 }
 
-function createRoom(mode = "friend") {
+function createRoom(mode = "friend", game = "doudizhu") {
   let code = "";
   do {
     code = String(Math.floor(1000 + Math.random() * 9000));
@@ -172,6 +195,7 @@ function createRoom(mode = "friend") {
 
   const room = {
     code,
+    game,
     mode,
     players: [],
     status: "waiting",
@@ -187,15 +211,22 @@ function createRoom(mode = "friend") {
     roundId: 0,
     baseScore: 1,
     multiplier: 1,
-    lastSettlement: []
+    lastSettlement: [],
+    chessBoard: null,
+    chessTurnColor: "red",
+    chessHistory: [],
+    redPlayerId: "",
+    blackPlayerId: "",
+    chessWinnerColor: ""
   };
   rooms.set(code, room);
   return room;
 }
 
-function findJoinableRoom(mode = "friend") {
+function findJoinableRoom(mode = "friend", game = "doudizhu") {
   for (const room of rooms.values()) {
-    if (room.mode === mode && room.status === "waiting" && room.players.length < 3) {
+    const maxPlayers = room.game === "chess" ? 2 : 3;
+    if (room.mode === mode && room.game === game && room.status === "waiting" && room.players.length < maxPlayers) {
       return room;
     }
   }
@@ -211,8 +242,21 @@ function joinRoomByCode(player, code) {
   joinRoom(player, room);
 }
 
+function joinChessRoomByCode(player, code) {
+  const room = rooms.get(String(code || "").trim());
+  if (!room) {
+    send(player, { type: "error", message: "房间不存在" });
+    return;
+  }
+  if (room.game !== "chess") {
+    send(player, { type: "error", message: "这不是象棋房间" });
+    return;
+  }
+  joinRoom(player, room);
+}
+
 function goldMatch(player) {
-  const room = findJoinableRoom("gold") || createRoom("gold");
+  const room = findJoinableRoom("gold", "doudizhu") || createRoom("gold", "doudizhu");
   joinRoom(player, room);
   const joinedRoom = player.roomCode ? rooms.get(player.roomCode) : null;
   if (joinedRoom && joinedRoom.status === "waiting") {
@@ -223,10 +267,11 @@ function goldMatch(player) {
 
 function joinRoom(player, room) {
   if (player.roomCode === room.code) {
-    sendSnapshot(room);
+    sendRoomSnapshot(room);
     return;
   }
-  if (room.players.length >= 3) {
+  const maxPlayers = room.game === "chess" ? 2 : 3;
+  if (room.players.length >= maxPlayers) {
     send(player, { type: "error", message: "房间已满" });
     return;
   }
@@ -240,8 +285,16 @@ function joinRoom(player, room) {
   player.hand = [];
   room.players.push(player);
   normalizeSeats(room);
+  if (room.game === "chess") {
+    assignChessSides(room);
+    sendChessSnapshot(room, `${player.name} 加入了象棋房间`);
+    if (room.players.length === 2) {
+      startChess(room);
+    }
+    return;
+  }
   sendSnapshot(room, `${player.name} 加入了房间`);
-  if (room.players.length === 3) {
+  if (room.players.length === maxPlayers) {
     startGame(room);
   }
 }
@@ -265,6 +318,18 @@ function leaveRoom(player, silent) {
   }
   if (room.turnIndex >= room.players.length) {
     room.turnIndex = 0;
+  }
+
+  if (room.game === "chess") {
+    if (room.status === "playing") {
+      room.status = "ended";
+      room.winnerName = "对局因玩家离开结束";
+    } else {
+      room.status = "waiting";
+    }
+    assignChessSides(room);
+    sendChessSnapshot(room, silent ? "" : `${player.name} 离开了房间`);
+    return;
   }
 
   if (room.status === "bidding" || room.status === "playing") {
@@ -329,6 +394,218 @@ function addBotToRoom(room) {
   room.players.push(bot);
   normalizeSeats(room);
   return bot;
+}
+
+function addChessBot(player) {
+  const room = currentRoom(player);
+  if (!room || room.game !== "chess") {
+    return;
+  }
+  if (room.status !== "waiting") {
+    send(player, { type: "error", message: "开局后不能补人机" });
+    return;
+  }
+  if (room.players.length >= 2) {
+    send(player, { type: "error", message: "房间已满" });
+    return;
+  }
+  const bot = {
+    id: `b${nextBotId++}`,
+    name: `棋手${nextBotId - 1}`,
+    ws: null,
+    roomCode: room.code,
+    hand: [],
+    bot: true,
+    score: 0,
+    autoPlay: true,
+    disconnected: false,
+    closeTimer: null
+  };
+  players.set(bot.id, bot);
+  room.players.push(bot);
+  normalizeSeats(room);
+  assignChessSides(room);
+  sendChessSnapshot(room, `${bot.name} 加入了象棋房间`);
+  startChess(room);
+}
+
+function assignChessSides(room) {
+  room.redPlayerId = room.players[0] ? room.players[0].id : "";
+  room.blackPlayerId = room.players[1] ? room.players[1].id : "";
+}
+
+function startChess(room) {
+  assignChessSides(room);
+  room.chessBoard = createChessBoard();
+  room.chessTurnColor = "red";
+  room.chessHistory = [];
+  room.chessWinnerColor = "";
+  room.winnerName = "";
+  room.status = "playing";
+  room.roundId += 1;
+  sendChessSnapshot(room, "象棋开局，红方先行");
+  scheduleChessBot(room);
+}
+
+function restartChess(player) {
+  const room = currentRoom(player);
+  if (!room || room.game !== "chess") {
+    return;
+  }
+  if (room.players.length < 2) {
+    room.status = "waiting";
+    sendChessSnapshot(room, "等待对手加入");
+    return;
+  }
+  startChess(room);
+}
+
+function moveChess(player, message) {
+  const room = currentRoom(player);
+  if (!room || room.game !== "chess" || room.status !== "playing") {
+    return;
+  }
+  const turnPlayerId = chessTurnPlayerId(room);
+  if (turnPlayerId !== player.id) {
+    send(player, { type: "error", message: "还没轮到你" });
+    return;
+  }
+  const fromRow = Number(message.fromRow);
+  const fromCol = Number(message.fromCol);
+  const toRow = Number(message.toRow);
+  const toCol = Number(message.toCol);
+  if (!legalChessMove(room.chessBoard, fromRow, fromCol, toRow, toCol)) {
+    send(player, { type: "error", message: "这一步不符合象棋规则" });
+    return;
+  }
+  const piece = room.chessBoard[fromRow][fromCol];
+  if (chessPieceColor(piece) !== room.chessTurnColor) {
+    send(player, { type: "error", message: "请选择自己的棋子" });
+    return;
+  }
+  const captured = room.chessBoard[toRow][toCol];
+  room.chessHistory.push({
+    board: copyChessBoard(room.chessBoard),
+    turnColor: room.chessTurnColor,
+    status: room.status,
+    winnerName: room.winnerName,
+    chessWinnerColor: room.chessWinnerColor
+  });
+  room.chessBoard[toRow][toCol] = piece;
+  room.chessBoard[fromRow][fromCol] = null;
+  if (generalsFace(room.chessBoard)) {
+    const previous = room.chessHistory.pop();
+    restoreChess(room, previous);
+    send(player, { type: "error", message: "将帅不能直接照面" });
+    return;
+  }
+  if (captured === "帅" || captured === "将") {
+    room.status = "ended";
+    room.chessWinnerColor = room.chessTurnColor;
+    room.winnerName = chessPlayerName(room, room.chessTurnColor) + " 获胜";
+    sendChessSnapshot(room, room.winnerName);
+    return;
+  }
+  room.chessTurnColor = room.chessTurnColor === "red" ? "black" : "red";
+  sendChessSnapshot(room, captured ? `${player.name} 吃掉 ${captured}` : `${player.name} 落子`);
+  scheduleChessBot(room);
+}
+
+function undoChess(player) {
+  const room = currentRoom(player);
+  if (!room || room.game !== "chess") {
+    return;
+  }
+  const previous = room.chessHistory.pop();
+  if (!previous) {
+    send(player, { type: "error", message: "当前没有可悔棋的步数" });
+    return;
+  }
+  restoreChess(room, previous);
+  sendChessSnapshot(room, `${player.name} 悔棋`);
+}
+
+function restoreChess(room, state) {
+  room.chessBoard = copyChessBoard(state.board);
+  room.chessTurnColor = state.turnColor;
+  room.status = state.status;
+  room.winnerName = state.winnerName;
+  room.chessWinnerColor = state.chessWinnerColor;
+}
+
+function scheduleChessBot(room) {
+  const roundId = room.roundId;
+  const player = room.players.find((item) => item.id === chessTurnPlayerId(room));
+  if (!player || !player.bot || room.status !== "playing") {
+    return;
+  }
+  setTimeout(() => {
+    const latest = rooms.get(room.code);
+    if (!latest || latest.roundId !== roundId || latest.status !== "playing") {
+      return;
+    }
+    const current = latest.players.find((item) => item.id === chessTurnPlayerId(latest));
+    if (!current || !current.bot) {
+      return;
+    }
+    const move = findChessBotMove(latest);
+    if (move) {
+      moveChess(current, move);
+    }
+  }, 800);
+}
+
+function findChessBotMove(room) {
+  const moves = [];
+  for (let fromRow = 0; fromRow < 10; fromRow += 1) {
+    for (let fromCol = 0; fromCol < 9; fromCol += 1) {
+      const piece = room.chessBoard[fromRow][fromCol];
+      if (!piece || chessPieceColor(piece) !== room.chessTurnColor) {
+        continue;
+      }
+      for (let toRow = 0; toRow < 10; toRow += 1) {
+        for (let toCol = 0; toCol < 9; toCol += 1) {
+          if (legalChessMove(room.chessBoard, fromRow, fromCol, toRow, toCol)) {
+            const copy = copyChessBoard(room.chessBoard);
+            copy[toRow][toCol] = piece;
+            copy[fromRow][fromCol] = null;
+            if (!generalsFace(copy)) {
+              moves.push({ fromRow, fromCol, toRow, toCol });
+            }
+          }
+        }
+      }
+    }
+  }
+  moves.sort((left, right) => {
+    const leftCapture = room.chessBoard[left.toRow][left.toCol] ? 1 : 0;
+    const rightCapture = room.chessBoard[right.toRow][right.toCol] ? 1 : 0;
+    return rightCapture - leftCapture;
+  });
+  return moves[0] || null;
+}
+
+function createChessBoard() {
+  const board = Array.from({ length: 10 }, () => Array(9).fill(null));
+  const blackBack = ["車", "馬", "象", "士", "将", "士", "象", "馬", "車"];
+  const redBack = ["车", "马", "相", "仕", "帅", "仕", "相", "马", "车"];
+  for (let col = 0; col < 9; col += 1) {
+    board[0][col] = blackBack[col];
+    board[9][col] = redBack[col];
+  }
+  board[2][1] = "砲";
+  board[2][7] = "砲";
+  board[7][1] = "炮";
+  board[7][7] = "炮";
+  for (let col = 0; col < 9; col += 2) {
+    board[3][col] = "卒";
+    board[6][col] = "兵";
+  }
+  return board;
+}
+
+function copyChessBoard(board) {
+  return board.map((row) => [...row]);
 }
 
 function fillBots(room) {
@@ -484,6 +761,10 @@ function restart(player) {
   if (!room) {
     return;
   }
+  if (room.game === "chess") {
+    restartChess(player);
+    return;
+  }
   if (room.players.length < 3) {
     room.status = "waiting";
     sendSnapshot(room, "等待玩家加入");
@@ -597,6 +878,174 @@ function sendSnapshot(room, notice = "") {
       suggestion: suggestionFor(player, room)
     });
   }
+}
+
+function sendRoomSnapshot(room, notice = "") {
+  if (room.game === "chess") {
+    sendChessSnapshot(room, notice);
+  } else {
+    sendSnapshot(room, notice);
+  }
+}
+
+function sendChessSnapshot(room, notice = "") {
+  for (const player of room.players) {
+    if (!player.ws || player.ws.readyState !== WebSocket.OPEN) {
+      continue;
+    }
+    send(player, {
+      type: "chessSnapshot",
+      you: player.id,
+      message: notice,
+      room: publicChessRoom(room)
+    });
+  }
+}
+
+function publicChessRoom(room) {
+  return {
+    code: room.code,
+    game: "chess",
+    mode: room.mode || "friend",
+    status: room.status,
+    board: room.chessBoard || createChessBoard(),
+    turnColor: room.chessTurnColor || "red",
+    turnPlayerId: chessTurnPlayerId(room),
+    redPlayerId: room.redPlayerId,
+    blackPlayerId: room.blackPlayerId,
+    winnerName: room.winnerName,
+    historyCount: room.chessHistory ? room.chessHistory.length : 0,
+    players: room.players.map((player) => ({
+      id: player.id,
+      name: player.name,
+      seat: player.seat,
+      side: player.id === room.redPlayerId ? "red" : player.id === room.blackPlayerId ? "black" : "",
+      bot: player.bot,
+      disconnected: player.disconnected
+    }))
+  };
+}
+
+function chessTurnPlayerId(room) {
+  return room.chessTurnColor === "red" ? room.redPlayerId : room.blackPlayerId;
+}
+
+function chessPlayerName(room, color) {
+  const id = color === "red" ? room.redPlayerId : room.blackPlayerId;
+  const player = room.players.find((item) => item.id === id);
+  return player ? player.name : color === "red" ? "红方" : "黑方";
+}
+
+function legalChessMove(board, fromRow, fromCol, toRow, toCol) {
+  if (!insideChessBoard(fromRow, fromCol) || !insideChessBoard(toRow, toCol)) {
+    return false;
+  }
+  const piece = board[fromRow][fromCol];
+  if (!piece || (fromRow === toRow && fromCol === toCol)) {
+    return false;
+  }
+  const target = board[toRow][toCol];
+  const red = chessPieceColor(piece) === "red";
+  if (target && chessPieceColor(target) === chessPieceColor(piece)) {
+    return false;
+  }
+  const rowDelta = toRow - fromRow;
+  const colDelta = toCol - fromCol;
+  const absRow = Math.abs(rowDelta);
+  const absCol = Math.abs(colDelta);
+  if (piece === "帅" || piece === "将") {
+    if (fromCol === toCol && target && (target === "帅" || target === "将") && clearChessStraight(board, fromRow, fromCol, toRow, toCol)) {
+      return true;
+    }
+    return inChessPalace(toRow, toCol, red) && absRow + absCol === 1;
+  }
+  if (piece === "仕" || piece === "士") {
+    return inChessPalace(toRow, toCol, red) && absRow === 1 && absCol === 1;
+  }
+  if (piece === "相" || piece === "象") {
+    const eyeRow = (fromRow + toRow) / 2;
+    const eyeCol = (fromCol + toCol) / 2;
+    const sameSide = red ? toRow >= 5 : toRow <= 4;
+    return sameSide && absRow === 2 && absCol === 2 && !board[eyeRow][eyeCol];
+  }
+  if (piece === "马" || piece === "馬") {
+    if (!((absRow === 2 && absCol === 1) || (absRow === 1 && absCol === 2))) {
+      return false;
+    }
+    const legRow = fromRow + (absRow === 2 ? rowDelta / 2 : 0);
+    const legCol = fromCol + (absCol === 2 ? colDelta / 2 : 0);
+    return !board[legRow][legCol];
+  }
+  if (piece === "车" || piece === "車") {
+    return clearChessStraight(board, fromRow, fromCol, toRow, toCol);
+  }
+  if (piece === "炮" || piece === "砲") {
+    const screens = countChessBetween(board, fromRow, fromCol, toRow, toCol);
+    return target ? screens === 1 : screens === 0;
+  }
+  if (piece === "兵" || piece === "卒") {
+    const forward = red ? -1 : 1;
+    if (rowDelta === forward && colDelta === 0) {
+      return true;
+    }
+    const crossedRiver = red ? fromRow <= 4 : fromRow >= 5;
+    return crossedRiver && rowDelta === 0 && absCol === 1;
+  }
+  return false;
+}
+
+function insideChessBoard(row, col) {
+  return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && row < 10 && col >= 0 && col < 9;
+}
+
+function chessPieceColor(piece) {
+  return "车马相仕帅炮兵".includes(piece) ? "red" : "black";
+}
+
+function inChessPalace(row, col, red) {
+  return col >= 3 && col <= 5 && (red ? row >= 7 && row <= 9 : row >= 0 && row <= 2);
+}
+
+function clearChessStraight(board, fromRow, fromCol, toRow, toCol) {
+  return countChessBetween(board, fromRow, fromCol, toRow, toCol) === 0;
+}
+
+function countChessBetween(board, fromRow, fromCol, toRow, toCol) {
+  if (fromRow !== toRow && fromCol !== toCol) {
+    return -1;
+  }
+  let count = 0;
+  const rowStep = Math.sign(toRow - fromRow);
+  const colStep = Math.sign(toCol - fromCol);
+  let row = fromRow + rowStep;
+  let col = fromCol + colStep;
+  while (row !== toRow || col !== toCol) {
+    if (board[row][col]) {
+      count += 1;
+    }
+    row += rowStep;
+    col += colStep;
+  }
+  return count;
+}
+
+function generalsFace(board) {
+  let red = null;
+  let black = null;
+  for (let row = 0; row < 10; row += 1) {
+    for (let col = 0; col < 9; col += 1) {
+      if (board[row][col] === "帅") {
+        red = { row, col };
+      }
+      if (board[row][col] === "将") {
+        black = { row, col };
+      }
+    }
+  }
+  if (!red || !black || red.col !== black.col) {
+    return false;
+  }
+  return countChessBetween(board, black.row, black.col, red.row, red.col) === 0;
 }
 
 function publicRoom(room) {
