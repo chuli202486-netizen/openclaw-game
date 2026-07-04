@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.Set;
 
 public class MainActivity extends Activity implements GameClient.Listener {
-    private static final String DEFAULT_SERVER = "ws://10.0.2.2:8080";
+    private static final String DEFAULT_SERVER = "ws://8.130.210.86:8080";
 
     private static final int FELT_DARK = Color.rgb(18, 82, 60);
     private static final int FELT = Color.rgb(31, 128, 88);
