@@ -493,10 +493,10 @@ function moveChess(player, message) {
   });
   room.chessBoard[toRow][toCol] = piece;
   room.chessBoard[fromRow][fromCol] = null;
-  if (generalsFace(room.chessBoard)) {
+  if (generalsFace(room.chessBoard) || chessInCheck(room.chessBoard, room.chessTurnColor)) {
     const previous = room.chessHistory.pop();
     restoreChess(room, previous);
-    send(player, { type: "error", message: "将帅不能直接照面" });
+    send(player, { type: "error", message: "不能主动送将" });
     return;
   }
   if (captured === "帅" || captured === "将") {
@@ -507,7 +507,16 @@ function moveChess(player, message) {
     return;
   }
   room.chessTurnColor = room.chessTurnColor === "red" ? "black" : "red";
-  sendChessSnapshot(room, captured ? `${player.name} 吃掉 ${captured}` : `${player.name} 落子`);
+  const check = chessInCheck(room.chessBoard, room.chessTurnColor);
+  if (check && !hasLegalChessMove(room.chessBoard, room.chessTurnColor)) {
+    const winnerColor = room.chessTurnColor === "red" ? "black" : "red";
+    room.status = "ended";
+    room.chessWinnerColor = winnerColor;
+    room.winnerName = chessPlayerName(room, winnerColor) + " 绝杀获胜";
+    sendChessSnapshot(room, room.winnerName);
+    return;
+  }
+  sendChessSnapshot(room, check ? `${player.name} 将军` : (captured ? `${player.name} 吃掉 ${captured}` : `${player.name} 落子`));
   scheduleChessBot(room);
 }
 
@@ -565,13 +574,8 @@ function findChessBotMove(room) {
       }
       for (let toRow = 0; toRow < 10; toRow += 1) {
         for (let toCol = 0; toCol < 9; toCol += 1) {
-          if (legalChessMove(room.chessBoard, fromRow, fromCol, toRow, toCol)) {
-            const copy = copyChessBoard(room.chessBoard);
-            copy[toRow][toCol] = piece;
-            copy[fromRow][fromCol] = null;
-            if (!generalsFace(copy)) {
-              moves.push({ fromRow, fromCol, toRow, toCol });
-            }
+          if (legalChessMoveConsideringCheck(room.chessBoard, fromRow, fromCol, toRow, toCol)) {
+            moves.push({ fromRow, fromCol, toRow, toCol });
           }
         }
       }
@@ -911,6 +915,7 @@ function publicChessRoom(room) {
     board: room.chessBoard || createChessBoard(),
     turnColor: room.chessTurnColor || "red",
     turnPlayerId: chessTurnPlayerId(room),
+    checkColor: room.status === "playing" && chessInCheck(room.chessBoard || createChessBoard(), room.chessTurnColor) ? room.chessTurnColor : "",
     redPlayerId: room.redPlayerId,
     blackPlayerId: room.blackPlayerId,
     winnerName: room.winnerName,
@@ -994,6 +999,37 @@ function legalChessMove(board, fromRow, fromCol, toRow, toCol) {
   return false;
 }
 
+function legalChessMoveConsideringCheck(board, fromRow, fromCol, toRow, toCol) {
+  if (!legalChessMove(board, fromRow, fromCol, toRow, toCol)) {
+    return false;
+  }
+  const copy = copyChessBoard(board);
+  const piece = copy[fromRow][fromCol];
+  const color = chessPieceColor(piece);
+  copy[toRow][toCol] = piece;
+  copy[fromRow][fromCol] = null;
+  return !generalsFace(copy) && !chessInCheck(copy, color);
+}
+
+function hasLegalChessMove(board, color) {
+  for (let fromRow = 0; fromRow < 10; fromRow += 1) {
+    for (let fromCol = 0; fromCol < 9; fromCol += 1) {
+      const piece = board[fromRow][fromCol];
+      if (!piece || chessPieceColor(piece) !== color) {
+        continue;
+      }
+      for (let toRow = 0; toRow < 10; toRow += 1) {
+        for (let toCol = 0; toCol < 9; toCol += 1) {
+          if (legalChessMoveConsideringCheck(board, fromRow, fromCol, toRow, toCol)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 function insideChessBoard(row, col) {
   return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && row < 10 && col >= 0 && col < 9;
 }
@@ -1008,6 +1044,32 @@ function inChessPalace(row, col, red) {
 
 function clearChessStraight(board, fromRow, fromCol, toRow, toCol) {
   return countChessBetween(board, fromRow, fromCol, toRow, toCol) === 0;
+}
+
+function chessInCheck(board, color) {
+  const king = color === "red" ? "帅" : "将";
+  let kingRow = -1;
+  let kingCol = -1;
+  for (let row = 0; row < 10; row += 1) {
+    for (let col = 0; col < 9; col += 1) {
+      if (board[row][col] === king) {
+        kingRow = row;
+        kingCol = col;
+      }
+    }
+  }
+  if (kingRow < 0) {
+    return true;
+  }
+  for (let row = 0; row < 10; row += 1) {
+    for (let col = 0; col < 9; col += 1) {
+      const piece = board[row][col];
+      if (piece && chessPieceColor(piece) !== color && legalChessMove(board, row, col, kingRow, kingCol)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function countChessBetween(board, fromRow, fromCol, toRow, toCol) {

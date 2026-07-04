@@ -53,6 +53,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private static final int CHESS_WOOD_LIGHT = Color.rgb(242, 204, 127);
     private static final int CHESS_RED = Color.rgb(185, 32, 31);
     private static final int CHESS_BLACK = Color.rgb(36, 36, 32);
+    private static final float CHESS_BOARD_Y_RATIO = 1.38f;
 
     private final GameClient client = new GameClient();
     private final Set<String> selectedCards = new HashSet<>();
@@ -374,24 +375,24 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(12), dp(12), dp(10));
+        root.setPadding(dp(12), dp(10), dp(12), dp(8));
         root.setBackground(chessBackground());
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.VERTICAL);
-        top.setPadding(dp(12), dp(10), dp(12), dp(10));
+        top.setPadding(dp(10), dp(8), dp(10), dp(8));
         top.setBackground(round(Color.argb(180, 81, 44, 21), dp(14), Color.argb(130, 255, 226, 158), dp(1)));
-        TextView header = title("中国象棋", 25, Color.rgb(255, 238, 196));
+        TextView header = title("中国象棋", compactPortrait() ? 22 : 25, Color.rgb(255, 238, 196));
         header.setGravity(Gravity.CENTER);
-        top.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+        top.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, compactPortrait() ? dp(26) : dp(32)));
         TextView state = smallPill(chessStatusText(chessRoom),
                 Color.argb(215, 255, 238, 184), INK);
-        LinearLayout.LayoutParams stateParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34));
-        stateParams.setMargins(0, dp(8), 0, 0);
+        LinearLayout.LayoutParams stateParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, compactPortrait() ? dp(30) : dp(34));
+        stateParams.setMargins(0, compactPortrait() ? dp(5) : dp(8), 0, 0);
         top.addView(state, stateParams);
         if (online) {
             LinearLayout onlineRow = row();
-            onlineRow.setPadding(0, dp(8), 0, 0);
+            onlineRow.setPadding(0, compactPortrait() ? dp(4) : dp(8), 0, 0);
             if ("waiting".equals(chessRoom.optString("status"))) {
                 Button bot = outlineButton("补人机");
                 bot.setOnClickListener(new View.OnClickListener() {
@@ -417,6 +418,8 @@ public class MainActivity extends Activity implements GameClient.Listener {
         } else {
             chessRoomCodeInput = edit("输入房间号", "");
             chessRoomCodeInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+            chessRoomCodeInput.setTextSize(compactPortrait() ? 13 : 15);
+            chessRoomCodeInput.setMinHeight(0);
             top.addView(chessRoomCodeInput);
             LinearLayout onlineRow = row();
             Button create = actionButton("联机开房", ORANGE);
@@ -443,7 +446,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
         root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         ChineseChessBoardView chessView = new ChineseChessBoardView();
-        LinearLayout.LayoutParams boardParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, chineseChessBoardHeight());
+        LinearLayout.LayoutParams boardParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1);
         boardParams.setMargins(0, dp(10), 0, dp(10));
         root.addView(chessView, boardParams);
 
@@ -481,6 +484,11 @@ public class MainActivity extends Activity implements GameClient.Listener {
         back.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+                if (online) {
+                    sendChessType("leaveRoom");
+                    chessSnapshot = null;
+                    resetChineseChess();
+                }
                 renderHome();
             }
         });
@@ -553,7 +561,9 @@ public class MainActivity extends Activity implements GameClient.Listener {
         }
         String side = room.optString("turnColor", "red").equals("red") ? "红方" : "黑方";
         String mine = playerId.equals(room.optString("turnPlayerId")) ? "轮到你" : "等待对手";
-        return "房间 " + code + "  ·  " + side + "回合  ·  " + mine;
+        String checkColor = room.optString("checkColor", "");
+        String check = checkColor.length() > 0 ? "  ·  将军" : "";
+        return "房间 " + code + "  ·  " + side + "回合  ·  " + mine + check;
     }
 
     private boolean isMyOnlineChessPiece(String piece, JSONObject room) {
@@ -611,7 +621,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             return;
         }
 
-        if (!legalChineseChessMove(selectedChessRow, selectedChessCol, row, col)) {
+        if (!isLegalChineseChessMoveConsideringCheck(selectedChessRow, selectedChessCol, row, col)) {
             chessNotice = "这一步不符合象棋规则";
             renderChineseChess();
             return;
@@ -622,13 +632,6 @@ public class MainActivity extends Activity implements GameClient.Listener {
         boolean beforeTurn = chessRedTurn;
         chessBoard[row][col] = selected;
         chessBoard[selectedChessRow][selectedChessCol] = null;
-        if (generalsFaceEachOther()) {
-            chessBoard[selectedChessRow][selectedChessCol] = selected;
-            chessBoard[row][col] = captured;
-            chessNotice = "将帅不能直接照面";
-            renderChineseChess();
-            return;
-        }
         chessHistory.add(beforeBoard);
         chessTurnHistory.add(beforeTurn);
         selectedChessRow = -1;
@@ -638,7 +641,13 @@ public class MainActivity extends Activity implements GameClient.Listener {
             chessNotice = (chessRedTurn ? "红方" : "黑方") + "获胜";
         } else {
             chessRedTurn = !chessRedTurn;
-            chessNotice = captured == null ? "落子完成" : "吃掉 " + captured;
+            boolean check = isInCheck(chessRedTurn);
+            if (check && !hasLegalChineseChessMove(chessBoard, chessRedTurn)) {
+                chessEnded = true;
+                chessNotice = (chessRedTurn ? "黑方" : "红方") + "绝杀获胜";
+            } else {
+                chessNotice = check ? "将军" : (captured == null ? "落子完成" : "吃掉 " + captured);
+            }
         }
         renderChineseChess();
     }
@@ -674,7 +683,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             renderChineseChess();
             return;
         }
-        if (!legalChineseChessMove(selectedChessRow, selectedChessCol, row, col)) {
+        if (!isLegalChineseChessMoveConsideringCheck(selectedChessRow, selectedChessCol, row, col)) {
             chessNotice = "这一步不符合象棋规则";
             renderChineseChess();
             return;
@@ -715,14 +724,18 @@ public class MainActivity extends Activity implements GameClient.Listener {
     }
 
     private boolean legalChineseChessMove(int fromRow, int fromCol, int toRow, int toCol) {
+        return legalChineseChessMove(chessBoard, fromRow, fromCol, toRow, toCol);
+    }
+
+    private boolean legalChineseChessMove(String[][] board, int fromRow, int fromCol, int toRow, int toCol) {
         if (!insideBoard(fromRow, fromCol) || !insideBoard(toRow, toCol)) {
             return false;
         }
-        String piece = chessBoard[fromRow][fromCol];
+        String piece = board[fromRow][fromCol];
         if (piece == null || fromRow == toRow && fromCol == toCol) {
             return false;
         }
-        String target = chessBoard[toRow][toCol];
+        String target = board[toRow][toCol];
         boolean red = isRedPiece(piece);
         if (target != null && isRedPiece(target) == red) {
             return false;
@@ -733,7 +746,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
         int absCol = Math.abs(colDelta);
 
         if ("帅".equals(piece) || "将".equals(piece)) {
-            if (fromCol == toCol && target != null && isGeneral(target) && clearStraight(fromRow, fromCol, toRow, toCol)) {
+            if (fromCol == toCol && target != null && isGeneral(target) && clearStraight(board, fromRow, fromCol, toRow, toCol)) {
                 return true;
             }
             return inPalace(toRow, toCol, red) && absRow + absCol == 1;
@@ -745,7 +758,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             int eyeRow = (fromRow + toRow) / 2;
             int eyeCol = (fromCol + toCol) / 2;
             boolean sameSide = red ? toRow >= 5 : toRow <= 4;
-            return sameSide && absRow == 2 && absCol == 2 && chessBoard[eyeRow][eyeCol] == null;
+            return sameSide && absRow == 2 && absCol == 2 && board[eyeRow][eyeCol] == null;
         }
         if ("马".equals(piece) || "馬".equals(piece)) {
             if (!((absRow == 2 && absCol == 1) || (absRow == 1 && absCol == 2))) {
@@ -753,13 +766,13 @@ public class MainActivity extends Activity implements GameClient.Listener {
             }
             int legRow = fromRow + (absRow == 2 ? rowDelta / 2 : 0);
             int legCol = fromCol + (absCol == 2 ? colDelta / 2 : 0);
-            return chessBoard[legRow][legCol] == null;
+            return board[legRow][legCol] == null;
         }
         if ("车".equals(piece) || "車".equals(piece)) {
-            return clearStraight(fromRow, fromCol, toRow, toCol);
+            return clearStraight(board, fromRow, fromCol, toRow, toCol);
         }
         if ("炮".equals(piece) || "砲".equals(piece)) {
-            int screens = countBetween(fromRow, fromCol, toRow, toCol);
+            int screens = countBetween(board, fromRow, fromCol, toRow, toCol);
             return target == null ? screens == 0 : screens == 1;
         }
         if ("兵".equals(piece) || "卒".equals(piece)) {
@@ -769,6 +782,71 @@ public class MainActivity extends Activity implements GameClient.Listener {
             }
             boolean crossedRiver = red ? fromRow <= 4 : fromRow >= 5;
             return crossedRiver && rowDelta == 0 && absCol == 1;
+        }
+        return false;
+    }
+
+    private boolean isLegalChineseChessMoveConsideringCheck(int fromRow, int fromCol, int toRow, int toCol) {
+        return isLegalChineseChessMoveConsideringCheck(chessBoard, fromRow, fromCol, toRow, toCol);
+    }
+
+    private boolean isLegalChineseChessMoveConsideringCheck(String[][] board, int fromRow, int fromCol, int toRow, int toCol) {
+        if (!legalChineseChessMove(board, fromRow, fromCol, toRow, toCol)) {
+            return false;
+        }
+        String[][] nextBoard = copyChineseChessBoard(board);
+        String piece = nextBoard[fromRow][fromCol];
+        boolean red = isRedPiece(piece);
+        nextBoard[toRow][toCol] = piece;
+        nextBoard[fromRow][fromCol] = null;
+        return !generalsFaceEachOther(nextBoard) && !isInCheck(nextBoard, red);
+    }
+
+    private boolean hasLegalChineseChessMove(String[][] board, boolean redTurn) {
+        for (int fromRow = 0; fromRow < 10; fromRow++) {
+            for (int fromCol = 0; fromCol < 9; fromCol++) {
+                String piece = board[fromRow][fromCol];
+                if (piece == null || isRedPiece(piece) != redTurn) {
+                    continue;
+                }
+                for (int toRow = 0; toRow < 10; toRow++) {
+                    for (int toCol = 0; toCol < 9; toCol++) {
+                        if (isLegalChineseChessMoveConsideringCheck(board, fromRow, fromCol, toRow, toCol)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isInCheck(boolean redKing) {
+        return isInCheck(chessBoard, redKing);
+    }
+
+    private boolean isInCheck(String[][] board, boolean redKing) {
+        int kingRow = -1;
+        int kingCol = -1;
+        String king = redKing ? "帅" : "将";
+        for (int row = 0; row < 10; row++) {
+            for (int col = 0; col < 9; col++) {
+                if (king.equals(board[row][col])) {
+                    kingRow = row;
+                    kingCol = col;
+                }
+            }
+        }
+        if (kingRow < 0) {
+            return true;
+        }
+        for (int row = 0; row < 10; row++) {
+            for (int col = 0; col < 9; col++) {
+                String piece = board[row][col];
+                if (piece != null && isRedPiece(piece) != redKing && legalChineseChessMove(board, row, col, kingRow, kingCol)) {
+                    return true;
+                }
+            }
         }
         return false;
     }
@@ -790,16 +868,20 @@ public class MainActivity extends Activity implements GameClient.Listener {
     }
 
     private boolean generalsFaceEachOther() {
+        return generalsFaceEachOther(chessBoard);
+    }
+
+    private boolean generalsFaceEachOther(String[][] board) {
         int redRow = -1;
         int redCol = -1;
         int blackRow = -1;
         int blackCol = -1;
         for (int row = 0; row < 10; row++) {
             for (int col = 0; col < 9; col++) {
-                if ("帅".equals(chessBoard[row][col])) {
+                if ("帅".equals(board[row][col])) {
                     redRow = row;
                     redCol = col;
-                } else if ("将".equals(chessBoard[row][col])) {
+                } else if ("将".equals(board[row][col])) {
                     blackRow = row;
                     blackCol = col;
                 }
@@ -808,14 +890,22 @@ public class MainActivity extends Activity implements GameClient.Listener {
         if (redCol < 0 || redCol != blackCol) {
             return false;
         }
-        return countBetween(blackRow, blackCol, redRow, redCol) == 0;
+        return countBetween(board, blackRow, blackCol, redRow, redCol) == 0;
     }
 
     private boolean clearStraight(int fromRow, int fromCol, int toRow, int toCol) {
-        return countBetween(fromRow, fromCol, toRow, toCol) == 0;
+        return clearStraight(chessBoard, fromRow, fromCol, toRow, toCol);
+    }
+
+    private boolean clearStraight(String[][] board, int fromRow, int fromCol, int toRow, int toCol) {
+        return countBetween(board, fromRow, fromCol, toRow, toCol) == 0;
     }
 
     private int countBetween(int fromRow, int fromCol, int toRow, int toCol) {
+        return countBetween(chessBoard, fromRow, fromCol, toRow, toCol);
+    }
+
+    private int countBetween(String[][] board, int fromRow, int fromCol, int toRow, int toCol) {
         if (fromRow != toRow && fromCol != toCol) {
             return -1;
         }
@@ -825,7 +915,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
         int row = fromRow + rowStep;
         int col = fromCol + colStep;
         while (row != toRow || col != toCol) {
-            if (chessBoard[row][col] != null) {
+            if (board[row][col] != null) {
                 count += 1;
             }
             row += rowStep;
@@ -1182,7 +1272,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             int width = getWidth();
             int height = getHeight();
             int cellX = Math.max(1, (int) (width / 9.15f));
-            int cellY = Math.max(1, Math.min((int) (cellX * 1.26f), (int) (height / 9.32f)));
+            int cellY = Math.max(1, Math.min((int) (cellX * CHESS_BOARD_Y_RATIO), (int) (height / 9.35f)));
             int actualWidth = cellX * 8;
             int actualHeight = cellY * 9;
             int left = (width - actualWidth) / 2;
@@ -1199,6 +1289,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             canvas.drawRoundRect(innerRect, dp(10), dp(10), paint);
 
             drawChessGrid(canvas, left, top, cellX, cellY);
+            drawMoveHints(canvas, left, top, cellX, cellY);
             drawSelectedPoint(canvas, left, top, cellX, cellY);
             drawChessPieces(canvas, left, top, cellX, cellY);
         }
@@ -1211,7 +1302,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             int width = getWidth();
             int height = getHeight();
             int cellX = Math.max(1, (int) (width / 9.15f));
-            int cellY = Math.max(1, Math.min((int) (cellX * 1.26f), (int) (height / 9.32f)));
+            int cellY = Math.max(1, Math.min((int) (cellX * CHESS_BOARD_Y_RATIO), (int) (height / 9.35f)));
             int actualWidth = cellX * 8;
             int actualHeight = cellY * 9;
             int left = (width - actualWidth) / 2;
@@ -1260,6 +1351,31 @@ public class MainActivity extends Activity implements GameClient.Listener {
             canvas.drawCircle(left + selectedChessCol * cellX, top + selectedChessRow * cellY, cellX * 0.48f, paint);
         }
 
+        private void drawMoveHints(Canvas canvas, int left, int top, int cellX, int cellY) {
+            if (selectedChessRow < 0 || chessBoard == null) {
+                return;
+            }
+            for (int row = 0; row < 10; row++) {
+                for (int col = 0; col < 9; col++) {
+                    if (!isLegalChineseChessMoveConsideringCheck(selectedChessRow, selectedChessCol, row, col)) {
+                        continue;
+                    }
+                    int cx = left + col * cellX;
+                    int cy = top + row * cellY;
+                    String target = chessBoard[row][col];
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(target == null ? Color.argb(170, 69, 139, 75) : Color.argb(145, 210, 48, 40));
+                    canvas.drawCircle(cx, cy, target == null ? cellX * 0.13f : cellX * 0.34f, paint);
+                    if (target != null) {
+                        paint.setStyle(Paint.Style.STROKE);
+                        paint.setStrokeWidth(dp(3));
+                        paint.setColor(Color.argb(210, 255, 238, 142));
+                        canvas.drawCircle(cx, cy, cellX * 0.43f, paint);
+                    }
+                }
+            }
+        }
+
         private void drawChessPieces(Canvas canvas, int left, int top, int cellX, int cellY) {
             for (int row = 0; row < 10; row++) {
                 for (int col = 0; col < 9; col++) {
@@ -1267,20 +1383,21 @@ public class MainActivity extends Activity implements GameClient.Listener {
                     if (piece == null) {
                         continue;
                     }
-                    drawPiece(canvas, piece, left + col * cellX, top + row * cellY, cellX);
+                    int lift = row == selectedChessRow && col == selectedChessCol ? Math.min(dp(18), cellY / 5) : 0;
+                    drawPiece(canvas, piece, left + col * cellX, top + row * cellY - lift, cellX, lift > 0);
                 }
             }
         }
 
-        private void drawPiece(Canvas canvas, String piece, int cx, int cy, int cell) {
-            float radius = cell * 0.42f;
+        private void drawPiece(Canvas canvas, String piece, int cx, int cy, int cell, boolean floating) {
+            float radius = floating ? cell * 0.46f : cell * 0.42f;
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(80, 30, 20, 10));
-            canvas.drawCircle(cx + dp(2), cy + dp(3), radius, paint);
+            paint.setColor(floating ? Color.argb(135, 30, 20, 10) : Color.argb(80, 30, 20, 10));
+            canvas.drawCircle(cx + dp(2), cy + (floating ? dp(9) : dp(3)), radius, paint);
             paint.setColor(Color.rgb(255, 240, 198));
             canvas.drawCircle(cx, cy, radius, paint);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(2));
+            paint.setStrokeWidth(floating ? dp(3) : dp(2));
             paint.setColor(isRedPiece(piece) ? CHESS_RED : CHESS_BLACK);
             canvas.drawCircle(cx, cy, radius - dp(3), paint);
             paint.setStyle(Paint.Style.FILL);
@@ -1399,7 +1516,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
         edit.setFocusableInTouchMode(true);
         edit.setCursorVisible(true);
         edit.setSelectAllOnFocus(false);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, editHeight());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, "chess".equals(activeScreen) && compactPortrait() ? dp(34) : editHeight());
         params.setMargins(0, compactHeight(dp(5), dp(8)), 0, 0);
         edit.setLayoutParams(params);
         return edit;
@@ -1780,15 +1897,21 @@ public class MainActivity extends Activity implements GameClient.Listener {
     }
 
     private int chessActionHeight() {
-        return clamp(screenHeightPx() / 15, dp(46), dp(58));
+        return compactPortrait() ? dp(42) : clamp(screenHeightPx() / 15, dp(46), dp(58));
     }
 
     private int chineseChessBoardHeight() {
         int shortest = Math.min(screenWidthPx(), screenHeightPx());
         int cellX = Math.max(1, (int) (shortest / 9.15f));
-        int wanted = (int) (cellX * 9 * 1.26f) + dp(34);
-        int max = Math.max(dp(620), screenHeightPx() - chessTopHeight() - chessActionHeight() - dp(56));
-        return clamp(wanted, dp(560), max);
+        int wanted = (int) (cellX * 9 * CHESS_BOARD_Y_RATIO) + dp(34);
+        int max = Math.max(dp(420), screenHeightPx() - chessTopHeight() - chessActionHeight() - dp(190));
+        return clamp(wanted, dp(420), max);
+    }
+
+    private boolean compactPortrait() {
+        int shortest = Math.min(screenWidthPx(), screenHeightPx());
+        int longest = Math.max(screenWidthPx(), screenHeightPx());
+        return longest / Math.max(1f, shortest) < 1.95f || longest <= dp(760);
     }
 
     private int infoRowHeight() {
