@@ -55,10 +55,10 @@ function handleMessage(player, message) {
       resumePlayer(player, message);
       break;
     case "createRoom":
-      joinRoom(player, createRoom());
+      joinRoom(player, createRoom("friend"));
       break;
     case "quickJoin":
-      joinRoom(player, findJoinableRoom() || createRoom());
+      joinRoom(player, findJoinableRoom("friend") || createRoom("friend"));
       break;
     case "goldMatch":
       goldMatch(player);
@@ -164,7 +164,7 @@ function toggleAuto(player, enabled) {
   scheduleBot(room);
 }
 
-function createRoom() {
+function createRoom(mode = "friend") {
   let code = "";
   do {
     code = String(Math.floor(1000 + Math.random() * 9000));
@@ -172,6 +172,7 @@ function createRoom() {
 
   const room = {
     code,
+    mode,
     players: [],
     status: "waiting",
     bottom: [],
@@ -192,9 +193,9 @@ function createRoom() {
   return room;
 }
 
-function findJoinableRoom() {
+function findJoinableRoom(mode = "friend") {
   for (const room of rooms.values()) {
-    if (room.status === "waiting" && room.players.length < 3) {
+    if (room.mode === mode && room.status === "waiting" && room.players.length < 3) {
       return room;
     }
   }
@@ -211,11 +212,12 @@ function joinRoomByCode(player, code) {
 }
 
 function goldMatch(player) {
-  const room = findJoinableRoom() || createRoom();
+  const room = findJoinableRoom("gold") || createRoom("gold");
   joinRoom(player, room);
   const joinedRoom = player.roomCode ? rooms.get(player.roomCode) : null;
   if (joinedRoom && joinedRoom.status === "waiting") {
-    fillBots(joinedRoom);
+    const need = 3 - joinedRoom.players.length;
+    sendSnapshot(joinedRoom, need > 0 ? `金币场等待 ${need} 位真人玩家加入` : "金币场已配桌，准备开局");
   }
 }
 
@@ -293,6 +295,10 @@ function addBot(player) {
   }
   if (room.status !== "waiting") {
     send(player, { type: "error", message: "开局后不能补机器人" });
+    return;
+  }
+  if (room.mode === "gold") {
+    send(player, { type: "error", message: "金币场只匹配真人玩家，不能补机器人" });
     return;
   }
   if (room.players.length >= 3) {
@@ -596,6 +602,7 @@ function sendSnapshot(room, notice = "") {
 function publicRoom(room) {
   return {
     code: room.code,
+    mode: room.mode || "friend",
     status: room.status,
     landlordId: room.landlordId,
     turnPlayerId: currentPlayer(room) ? currentPlayer(room).id : "",

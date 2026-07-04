@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -63,8 +64,17 @@ public class MainActivity extends Activity implements GameClient.Listener {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        enterImmersiveMode();
         preferences = getSharedPreferences("openclaw", MODE_PRIVATE);
         renderHome();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            enterImmersiveMode();
+        }
     }
 
     @Override
@@ -143,8 +153,15 @@ public class MainActivity extends Activity implements GameClient.Listener {
         connection.addView(caption("先连服务器，再进入斗地主。模拟器默认地址已经填好。", CREAM));
         nameInput = edit("玩家昵称", preferences.getString("name", "玩家" + (System.currentTimeMillis() % 1000)));
         serverInput = edit("服务器地址", preferences.getString("server", DEFAULT_SERVER));
-        connection.addView(nameInput);
-        connection.addView(serverInput);
+        if (compactPhone()) {
+            LinearLayout inputs = row();
+            inputs.addView(nameInput, weightParams(1, editHeight()));
+            inputs.addView(serverInput, weightParams(2, editHeight()));
+            connection.addView(inputs);
+        } else {
+            connection.addView(nameInput);
+            connection.addView(serverInput);
+        }
 
         LinearLayout row = row();
         Button connect = actionButton(connected ? "进入大厅" : "连接服务器", ORANGE);
@@ -159,7 +176,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
                 }
             }
         });
-        row.addView(connect, weightParams(1, dp(48)));
+        row.addView(connect, weightParams(1, mainButtonHeight()));
         Button offline = outlineButton("只看界面");
         offline.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -167,7 +184,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
                 renderLobby();
             }
         });
-        row.addView(offline, weightParams(1, dp(48)));
+        row.addView(offline, weightParams(1, mainButtonHeight()));
         connection.addView(row);
         Button editServer = outlineButton("修改服务器地址");
         editServer.setOnClickListener(new View.OnClickListener() {
@@ -184,17 +201,17 @@ public class MainActivity extends Activity implements GameClient.Listener {
         content.addView(connection);
 
         LinearLayout games = row();
-        games.addView(gameTile("斗地主", "横屏牌桌", true), weightParams(2, dp(142)));
-        games.addView(gameTile("中国象棋", "预留", false), weightParams(1, dp(142)));
-        games.addView(gameTile("广东麻将", "预留", false), weightParams(1, dp(142)));
-        games.addView(gameTile("画我猜", "预留", false), weightParams(1, dp(142)));
-        games.addView(gameTile("谁是卧底", "预留", false), weightParams(1, dp(142)));
+        games.addView(gameTile("斗地主", "横屏牌桌", true), weightParams(2, gameTileHeight()));
+        games.addView(gameTile("中国象棋", "预留", false), weightParams(1, gameTileHeight()));
+        games.addView(gameTile("广东麻将", "预留", false), weightParams(1, gameTileHeight()));
+        games.addView(gameTile("画我猜", "预留", false), weightParams(1, gameTileHeight()));
+        games.addView(gameTile("谁是卧底", "预留", false), weightParams(1, gameTileHeight()));
         content.addView(games);
 
         if (lastNotice.length() > 0) {
             content.addView(toastStrip(lastNotice));
         }
-        root.addView(content, weightParams(1, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(scrollContent(content), weightParams(1, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
     }
 
@@ -210,24 +227,25 @@ public class MainActivity extends Activity implements GameClient.Listener {
             public void onClick(View view) {
                 sendType("createRoom");
             }
-        }), weightParams(1, dp(156)));
+        }), weightParams(1, lobbyCardHeight()));
         top.addView(lobbyCard("快速加入", "自动进入未满 3 人的牌桌", BLUE, new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 sendType("quickJoin");
             }
-        }), weightParams(1, dp(156)));
-        top.addView(lobbyCard("金币场", "自动配桌，立即开局", GOLD, new View.OnClickListener() {
+        }), weightParams(1, lobbyCardHeight()));
+        top.addView(lobbyCard("金币场", "真人匹配，满 3 人开局", GOLD, new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 sendType("goldMatch");
             }
-        }), weightParams(1, dp(156)));
+        }), weightParams(1, lobbyCardHeight()));
         content.addView(top);
 
         LinearLayout joinPanel = glassPanel();
         joinPanel.addView(title("加入指定房间", 20, WHITE));
         roomCodeInput = edit("输入 4 位房间号", "");
+        roomCodeInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         joinPanel.addView(roomCodeInput);
         LinearLayout buttons = row();
         Button join = actionButton("加入房间", GOLD);
@@ -241,7 +259,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
                 client.send(message);
             }
         });
-        buttons.addView(join, weightParams(1, dp(48)));
+        buttons.addView(join, weightParams(1, mainButtonHeight()));
         Button back = outlineButton("返回平台");
         back.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -249,14 +267,14 @@ public class MainActivity extends Activity implements GameClient.Listener {
                 renderHome();
             }
         });
-        buttons.addView(back, weightParams(1, dp(48)));
+        buttons.addView(back, weightParams(1, mainButtonHeight()));
         joinPanel.addView(buttons);
         content.addView(joinPanel);
 
         if (!connected) {
             content.addView(toastStrip("还没连接服务器。回首页点“连接服务器”，地址填 ws://10.0.2.2:8080。"));
         }
-        root.addView(content, weightParams(1, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(scrollContent(content), weightParams(1, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
     }
 
@@ -273,12 +291,12 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
         LinearLayout board = new LinearLayout(this);
         board.setOrientation(LinearLayout.VERTICAL);
-        board.setPadding(dp(12), dp(8), dp(12), dp(8));
+        board.setPadding(gameEdgePadding(), gameTopPadding(), gameEdgePadding(), gameTopPadding());
         root.addView(board, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        board.addView(topSeats(room), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(88)));
+        board.addView(topSeats(room), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, topSeatHeight()));
         board.addView(centerTable(room), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-        board.addView(myArea(room), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(142)));
+        board.addView(myArea(room), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, myAreaHeight()));
 
         root.addView(floatingActions(room), floatingRightParams());
 
@@ -310,20 +328,20 @@ public class MainActivity extends Activity implements GameClient.Listener {
         table.setOrientation(LinearLayout.VERTICAL);
 
         TextView bottom = smallPill("底牌  " + CardUtil.compactLabel(room.optJSONArray("bottom")), Color.argb(180, 17, 67, 56), CREAM);
-        table.addView(bottom, new LinearLayout.LayoutParams(dp(360), dp(36)));
+        table.addView(bottom, new LinearLayout.LayoutParams(tablePillWidth(), compactHeight(dp(32), dp(36))));
 
         JSONObject lastPlay = room.optJSONObject("lastPlay");
         LinearLayout last = new LinearLayout(this);
         last.setGravity(Gravity.CENTER);
         last.setOrientation(LinearLayout.VERTICAL);
         boolean ended = "ended".equals(room.optString("status"));
-        LinearLayout.LayoutParams lastParams = new LinearLayout.LayoutParams(dp(ended ? 540 : 430), dp(ended ? 168 : 116));
-        lastParams.setMargins(0, dp(10), 0, dp(10));
+        LinearLayout.LayoutParams lastParams = new LinearLayout.LayoutParams(tablePanelWidth(ended), tablePanelHeight(ended));
+        lastParams.setMargins(0, compactHeight(dp(6), dp(10)), 0, compactHeight(dp(6), dp(10)));
         last.setLayoutParams(lastParams);
         last.setBackground(round(Color.argb(120, 9, 43, 34), dp(14), Color.argb(150, 255, 230, 160), dp(1)));
         if (ended) {
             last.addView(title(room.optString("winnerName", "本局") + " 获胜", 25, WHITE));
-            last.addView(settlementBoard(room.optJSONArray("lastSettlement")), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(92)));
+            last.addView(settlementBoard(room.optJSONArray("lastSettlement")), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, settlementHeight()));
         } else if (lastPlay == null) {
             last.addView(title("等待出牌", 25, Color.argb(220, 255, 255, 255)));
             last.addView(caption("轮到谁，谁先开牌", Color.argb(230, 255, 230, 170)));
@@ -339,16 +357,16 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private View myArea(JSONObject room) {
         LinearLayout area = new LinearLayout(this);
         area.setOrientation(LinearLayout.VERTICAL);
-        area.setPadding(dp(8), 0, dp(148), 0);
+        area.setPadding(dp(6), 0, actionPanelWidth() + actionPanelMargin() + dp(8), 0);
 
         LinearLayout info = row();
         JSONObject me = findPlayer(room.optJSONArray("players"), playerId);
         String myName = me == null ? "我的手牌" : me.optString("name", "我") + " 的手牌";
         TextView handTitle = title(myName, 18, CREAM);
-        info.addView(handTitle, weightParams(1, dp(30)));
+        info.addView(handTitle, weightParams(1, infoRowHeight()));
         TextView hint = caption(turnHint(room), GOLD);
         hint.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        info.addView(hint, weightParams(2, dp(30)));
+        info.addView(hint, weightParams(2, infoRowHeight()));
         area.addView(info);
 
         HorizontalScrollView scroll = new HorizontalScrollView(this);
@@ -364,7 +382,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
             hand.addView(cardView(card, selectedCards.contains(card), cards.size(), i));
         }
         scroll.addView(hand);
-        area.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(102)));
+        area.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, handStripHeight()));
         return area;
     }
 
@@ -372,19 +390,27 @@ public class MainActivity extends Activity implements GameClient.Listener {
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.VERTICAL);
         actions.setGravity(Gravity.CENTER);
-        actions.setPadding(dp(8), dp(8), dp(8), dp(8));
+        actions.setPadding(actionPanelInnerPadding(), actionPanelInnerPadding(), actionPanelInnerPadding(), actionPanelInnerPadding());
         actions.setBackground(round(Color.argb(170, 13, 44, 39), dp(18), Color.argb(120, 255, 255, 255), dp(1)));
 
         String status = room.optString("status");
         boolean myTurn = playerId.length() > 0 && playerId.equals(room.optString("turnPlayerId"));
 
         if ("waiting".equals(status)) {
-            actions.addView(sideButton("补机器人", GOLD, INK, new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    sendType("addBot");
-                }
-            }));
+            if ("gold".equals(room.optString("mode"))) {
+                actions.addView(sideButton("等待真人", GOLD, INK, new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                    }
+                }, false));
+            } else {
+                actions.addView(sideButton("补机器人", GOLD, INK, new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        sendType("addBot");
+                    }
+                }));
+            }
         } else if ("bidding".equals(status)) {
             actions.addView(sideButton("叫地主", ORANGE, WHITE, new View.OnClickListener() {
                 @Override
@@ -461,19 +487,19 @@ public class MainActivity extends Activity implements GameClient.Listener {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setGravity(Gravity.BOTTOM);
         int slotWidth = cardSlotWidth(cardCount, index);
-        LinearLayout.LayoutParams wrapParams = new LinearLayout.LayoutParams(dp(slotWidth), dp(100));
+        LinearLayout.LayoutParams wrapParams = new LinearLayout.LayoutParams(slotWidth, handStripHeight());
         wrapParams.setMargins(dp(1), 0, dp(1), 0);
         wrap.setLayoutParams(wrapParams);
 
         TextView view = new TextView(this);
         view.setText(CardUtil.label(card));
         view.setGravity(Gravity.CENTER);
-        view.setTextSize(card.startsWith("X") || card.startsWith("D") ? 15 : 17);
+        view.setTextSize(cardTextSize(card));
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setTextColor(isRedCard(card) ? CARD_RED : INK);
         view.setBackground(round(selected ? Color.rgb(255, 243, 186) : WHITE, dp(8), selected ? GOLD : Color.rgb(211, 199, 178), dp(2)));
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(dp(50), dp(72));
-        cardParams.setMargins(0, selected ? 0 : dp(16), 0, selected ? dp(12) : 0);
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(cardWidth(), cardHeight());
+        cardParams.setMargins(0, selected ? 0 : cardDropOffset(), 0, selected ? selectedLiftOffset() : 0);
         wrap.addView(view, cardParams);
         wrap.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -490,19 +516,17 @@ public class MainActivity extends Activity implements GameClient.Listener {
     }
 
     private int cardSlotWidth(int cardCount, int index) {
+        if (cardCount <= 0) {
+            return cardWidth();
+        }
         if (index == cardCount - 1) {
-            return 54;
+            return cardWidth() + dp(4);
         }
-        if (cardCount >= 20) {
-            return 36;
-        }
-        if (cardCount >= 17) {
-            return 40;
-        }
-        if (cardCount >= 14) {
-            return 46;
-        }
-        return 54;
+        int usableWidth = Math.max(dp(280), screenWidthPx() - gameEdgePadding() * 2 - actionPanelWidth() - actionPanelMargin() - dp(28));
+        int naturalOverlap = compactHeight(dp(28), dp(36));
+        int fittedOverlap = (usableWidth - cardWidth() - dp(8)) / Math.max(1, cardCount - 1);
+        int minOverlap = compactHeight(dp(20), dp(28));
+        return clamp(Math.min(naturalOverlap, fittedOverlap), minOverlap, cardWidth() + dp(4));
     }
 
     private View playerBadge(JSONObject player, JSONObject room) {
@@ -616,7 +640,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private LinearLayout landscapeShell() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.HORIZONTAL);
-        root.setPadding(dp(16), dp(14), dp(16), dp(14));
+        root.setPadding(shellPadding(), shellPadding(), shellPadding(), shellPadding());
         root.setBackground(tableBackground());
         return root;
     }
@@ -634,8 +658,8 @@ public class MainActivity extends Activity implements GameClient.Listener {
         side.addView(chip, chipParams);
         side.addView(spacer(), new LinearLayout.LayoutParams(1, 0, 1));
         side.addView(caption("横屏牌桌 · 好友联机 · 机器人测试", Color.rgb(207, 234, 216)));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.MATCH_PARENT);
-        params.setMargins(0, 0, dp(14), 0);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(sideBrandWidth(), ViewGroup.LayoutParams.MATCH_PARENT);
+        params.setMargins(0, 0, compactHeight(dp(8), dp(14)), 0);
         side.setLayoutParams(params);
         return side;
     }
@@ -647,10 +671,18 @@ public class MainActivity extends Activity implements GameClient.Listener {
         return content;
     }
 
+    private ScrollView scrollContent(LinearLayout content) {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(content, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return scroll;
+    }
+
     private LinearLayout glassPanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(16), dp(14), dp(16), dp(14));
+        panel.setPadding(compactHeight(dp(12), dp(16)), compactHeight(dp(10), dp(14)), compactHeight(dp(12), dp(16)), compactHeight(dp(10), dp(14)));
         panel.setBackground(round(Color.argb(135, 6, 50, 43), dp(18), Color.argb(120, 255, 255, 255), dp(1)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, 0, 0, dp(12));
@@ -700,11 +732,12 @@ public class MainActivity extends Activity implements GameClient.Listener {
         edit.setHintTextColor(Color.rgb(125, 113, 96));
         edit.setPadding(dp(12), 0, dp(12), 0);
         edit.setBackground(round(CREAM, dp(10), Color.rgb(218, 190, 136), dp(1)));
-        edit.setFocusable(false);
-        edit.setFocusableInTouchMode(false);
-        edit.setCursorVisible(false);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(45));
-        params.setMargins(0, dp(8), 0, 0);
+        edit.setFocusable(true);
+        edit.setFocusableInTouchMode(true);
+        edit.setCursorVisible(true);
+        edit.setSelectAllOnFocus(false);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, editHeight());
+        params.setMargins(0, compactHeight(dp(5), dp(8)), 0, 0);
         edit.setLayoutParams(params);
         return edit;
     }
@@ -725,8 +758,8 @@ public class MainActivity extends Activity implements GameClient.Listener {
         Button button = button(text, enabled ? color : Color.rgb(94, 105, 100), textColor, false);
         button.setEnabled(enabled);
         button.setOnClickListener(listener);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
-        params.setMargins(0, dp(4), 0, dp(6));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, sideButtonHeight());
+        params.setMargins(0, dp(3), 0, compactHeight(dp(4), dp(6)));
         button.setLayoutParams(params);
         return button;
     }
@@ -735,14 +768,14 @@ public class MainActivity extends Activity implements GameClient.Listener {
         Button button = new Button(this);
         button.setText(text);
         button.setAllCaps(false);
-        button.setTextSize(15);
+        button.setTextSize(compactPhone() ? 14 : 15);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setTextColor(textColor);
         button.setGravity(Gravity.CENTER);
         button.setBackground(round(color, dp(12), Color.argb(120, 255, 255, 255), dp(1)));
         if (wide) {
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-            params.setMargins(0, dp(10), dp(8), 0);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, mainButtonHeight());
+            params.setMargins(0, compactHeight(dp(6), dp(10)), compactHeight(dp(5), dp(8)), 0);
             button.setLayoutParams(params);
         }
         return button;
@@ -751,7 +784,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private TextView title(String text, int sp, int color) {
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextSize(sp);
+        view.setTextSize(adaptiveTextSize(sp));
         view.setTextColor(color);
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setIncludeFontPadding(false);
@@ -762,7 +795,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private TextView caption(String text, int color) {
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextSize(13);
+        view.setTextSize(compactPhone() ? 12 : 13);
         view.setTextColor(color);
         view.setIncludeFontPadding(false);
         view.setGravity(Gravity.CENTER_VERTICAL);
@@ -774,7 +807,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
         TextView view = new TextView(this);
         view.setText(text);
         view.setTextColor(color);
-        view.setTextSize(13);
+        view.setTextSize(compactPhone() ? 12 : 13);
         view.setGravity(Gravity.CENTER);
         view.setSingleLine(true);
         view.setTypeface(Typeface.DEFAULT_BOLD);
@@ -804,13 +837,14 @@ public class MainActivity extends Activity implements GameClient.Listener {
 
     private LinearLayout.LayoutParams weightParams(int weight, int height) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, height, weight);
-        params.setMargins(dp(5), dp(5), dp(5), dp(5));
+        int margin = compactHeight(dp(3), dp(5));
+        params.setMargins(margin, margin, margin, margin);
         return params;
     }
 
     private FrameLayout.LayoutParams floatingRightParams() {
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(132), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        params.setMargins(0, 0, dp(12), 0);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(actionPanelWidth(), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        params.setMargins(0, 0, actionPanelMargin(), 0);
         return params;
     }
 
@@ -831,6 +865,10 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private String statusText(JSONObject room) {
         String status = room.optString("status");
         if ("waiting".equals(status)) {
+            if ("gold".equals(room.optString("mode"))) {
+                int count = room.optJSONArray("players") == null ? 0 : room.optJSONArray("players").length();
+                return "金币场等待真人 " + count + "/3";
+            }
             return "等待 3 人开局";
         }
         if ("bidding".equals(status)) {
@@ -867,6 +905,9 @@ public class MainActivity extends Activity implements GameClient.Listener {
             return "已选 " + selectedCards.size() + " 张";
         }
         if ("waiting".equals(room.optString("status"))) {
+            if ("gold".equals(room.optString("mode"))) {
+                return "等待真人玩家加入";
+            }
             return "补机器人可立即测试";
         }
         if (playerId.equals(room.optString("turnPlayerId"))) {
@@ -957,6 +998,159 @@ public class MainActivity extends Activity implements GameClient.Listener {
                 }
             }
         });
+    }
+
+    private void enterImmersiveMode() {
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    }
+
+    private int screenWidthPx() {
+        return getResources().getDisplayMetrics().widthPixels;
+    }
+
+    private int screenHeightPx() {
+        return getResources().getDisplayMetrics().heightPixels;
+    }
+
+    private boolean compactPhone() {
+        return Math.min(screenWidthPx(), screenHeightPx()) <= dp(460) || Math.max(screenWidthPx(), screenHeightPx()) <= dp(860);
+    }
+
+    private int compactHeight(int compactPx, int normalPx) {
+        return compactPhone() ? compactPx : normalPx;
+    }
+
+    private int shellPadding() {
+        return compactHeight(dp(8), dp(14));
+    }
+
+    private int sideBrandWidth() {
+        return clamp(screenWidthPx() / 4, dp(176), dp(250));
+    }
+
+    private int mainButtonHeight() {
+        return compactHeight(dp(36), dp(48));
+    }
+
+    private int editHeight() {
+        return compactHeight(dp(38), dp(45));
+    }
+
+    private int lobbyCardHeight() {
+        return clamp(screenHeightPx() / 4, dp(112), dp(156));
+    }
+
+    private int gameTileHeight() {
+        return clamp(screenHeightPx() / 6, dp(64), dp(142));
+    }
+
+    private int gameEdgePadding() {
+        return compactHeight(dp(6), dp(12));
+    }
+
+    private int gameTopPadding() {
+        return compactHeight(dp(5), dp(8));
+    }
+
+    private int topSeatHeight() {
+        return clamp(screenHeightPx() / 5, dp(84), dp(96));
+    }
+
+    private int myAreaHeight() {
+        return clamp(screenHeightPx() / 4, dp(116), dp(154));
+    }
+
+    private int actionPanelWidth() {
+        return clamp(screenWidthPx() / 8, dp(104), dp(136));
+    }
+
+    private int actionPanelMargin() {
+        return compactHeight(dp(6), dp(12));
+    }
+
+    private int actionPanelInnerPadding() {
+        return compactHeight(dp(6), dp(8));
+    }
+
+    private int sideButtonHeight() {
+        return compactHeight(dp(38), dp(46));
+    }
+
+    private int tablePillWidth() {
+        int available = screenWidthPx() - actionPanelWidth() - actionPanelMargin() - gameEdgePadding() * 2;
+        return clamp((int) (available * 0.45f), dp(260), dp(380));
+    }
+
+    private int tablePanelWidth(boolean ended) {
+        int available = screenWidthPx() - actionPanelWidth() - actionPanelMargin() - gameEdgePadding() * 2;
+        float ratio = ended ? 0.64f : 0.52f;
+        return clamp((int) (available * ratio), dp(320), dp(ended ? 560 : 450));
+    }
+
+    private int tablePanelHeight(boolean ended) {
+        return ended
+                ? clamp(screenHeightPx() / 4, dp(132), dp(168))
+                : clamp(screenHeightPx() / 6, dp(86), dp(116));
+    }
+
+    private int settlementHeight() {
+        return compactHeight(dp(78), dp(92));
+    }
+
+    private int infoRowHeight() {
+        return compactHeight(dp(26), dp(30));
+    }
+
+    private int handStripHeight() {
+        int wanted = cardHeight() + cardDropOffset() + selectedLiftOffset() + dp(8);
+        int max = Math.max(dp(76), myAreaHeight() - compactHeight(dp(32), dp(38)));
+        return clamp(wanted, dp(78), max);
+    }
+
+    private int cardHeight() {
+        return clamp(screenHeightPx() / 6, dp(62), dp(76));
+    }
+
+    private int cardWidth() {
+        return clamp(cardHeight() * 50 / 72, dp(42), dp(52));
+    }
+
+    private int cardDropOffset() {
+        return compactHeight(dp(8), dp(16));
+    }
+
+    private int selectedLiftOffset() {
+        return compactHeight(dp(8), dp(12));
+    }
+
+    private float cardTextSize(String card) {
+        if (card.startsWith("X") || card.startsWith("D")) {
+            return compactPhone() ? 13 : 15;
+        }
+        return compactPhone() ? 15 : 17;
+    }
+
+    private int adaptiveTextSize(int sp) {
+        if (!compactPhone()) {
+            return sp;
+        }
+        if (sp >= 26) {
+            return sp - 4;
+        }
+        if (sp >= 20) {
+            return sp - 2;
+        }
+        return sp;
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private int dp(int value) {
