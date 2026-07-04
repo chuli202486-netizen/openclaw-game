@@ -8,3 +8,5 @@ app/build/
 
 server/node_modules/
 server/.env
+
+openclaw-game.zip
