@@ -429,13 +429,20 @@ function addChessBot(player) {
   startChess(room);
 }
 
-function assignChessSides(room) {
+function assignChessSides(room, swapSides = false) {
+  const playerIds = new Set(room.players.map((item) => item.id));
+  if (swapSides && room.redPlayerId && room.blackPlayerId && playerIds.has(room.redPlayerId) && playerIds.has(room.blackPlayerId)) {
+    const previousRed = room.redPlayerId;
+    room.redPlayerId = room.blackPlayerId;
+    room.blackPlayerId = previousRed;
+    return;
+  }
   room.redPlayerId = room.players[0] ? room.players[0].id : "";
   room.blackPlayerId = room.players[1] ? room.players[1].id : "";
 }
 
-function startChess(room) {
-  assignChessSides(room);
+function startChess(room, swapSides = false) {
+  assignChessSides(room, swapSides);
   room.chessBoard = createChessBoard();
   room.chessTurnColor = "red";
   room.chessHistory = [];
@@ -443,7 +450,7 @@ function startChess(room) {
   room.winnerName = "";
   room.status = "playing";
   room.roundId += 1;
-  sendChessSnapshot(room, "象棋开局，红方先行");
+  sendChessSnapshot(room, swapSides ? "重新开局，双方交换红黑，红方先行" : "象棋开局，红方先行");
   scheduleChessBot(room);
 }
 
@@ -457,7 +464,7 @@ function restartChess(player) {
     sendChessSnapshot(room, "等待对手加入");
     return;
   }
-  startChess(room);
+  startChess(room, true);
 }
 
 function moveChess(player, message) {

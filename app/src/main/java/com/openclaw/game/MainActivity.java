@@ -1,6 +1,7 @@
 package com.openclaw.game;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.content.SharedPreferences;
@@ -77,6 +78,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
     private final List<Boolean> chessTurnHistory = new ArrayList<>();
     private boolean chessRedTurn = true;
     private boolean chessEnded = false;
+    private boolean localChessRedAtBottom = true;
     private int selectedChessRow = -1;
     private int selectedChessCol = -1;
     private String chessNotice = "红方先行";
@@ -115,12 +117,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
     @Override
     public void onBackPressed() {
         if ("chess".equals(activeScreen)) {
-            if (chessSnapshot != null) {
-                sendChessType("leaveRoom");
-                chessSnapshot = null;
-                resetChineseChess();
-            }
-            renderHome();
+            confirmReturnFromChess();
             return;
         }
         if ("game".equals(activeScreen)) {
@@ -132,6 +129,40 @@ public class MainActivity extends Activity implements GameClient.Listener {
             return;
         }
         super.onBackPressed();
+    }
+
+    private void confirmAction(String title, String message, String positiveText, final Runnable action) {
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton(positiveText, (dialog, which) -> action.run())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void confirmReturnFromChess() {
+        if (chessSnapshot != null) {
+            confirmAction("返回平台？", "返回平台会先离开当前象棋房间。", "返回", new Runnable() {
+                @Override
+                public void run() {
+                    leaveChessRoomOnly();
+                    renderHome();
+                }
+            });
+            return;
+        }
+        confirmAction("返回平台？", "当前棋局会保留在本机，回到平台后可再次进入。", "返回", new Runnable() {
+            @Override
+            public void run() {
+                renderHome();
+            }
+        });
+    }
+
+    private void leaveChessRoomOnly() {
+        sendChessType("leaveRoom");
+        chessSnapshot = null;
+        resetChineseChess();
     }
 
     @Override
@@ -407,10 +438,13 @@ public class MainActivity extends Activity implements GameClient.Listener {
             leave.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View view) {
-                    sendChessType("leaveRoom");
-                    chessSnapshot = null;
-                    resetChineseChess();
-                    renderChineseChess();
+                    confirmAction("离开房间？", "离开后将退出当前象棋房间。", "离开", new Runnable() {
+                        @Override
+                        public void run() {
+                            leaveChessRoomOnly();
+                            renderChineseChess();
+                        }
+                    });
                 }
             });
             onlineRow.addView(leave, weightParams(1, chessActionHeight()));
@@ -456,12 +490,18 @@ public class MainActivity extends Activity implements GameClient.Listener {
         restart.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (online) {
-                    sendChessType("chessRestart");
-                } else {
-                    resetChineseChess();
-                    renderChineseChess();
-                }
+                confirmAction("确认重开？", online ? "当前棋局会重新开始，并切换红黑执棋。" : "当前棋局会重新开始，并切换红黑视角。", "重开", new Runnable() {
+                    @Override
+                    public void run() {
+                        if (online) {
+                            sendChessType("chessRestart");
+                        } else {
+                            localChessRedAtBottom = !localChessRedAtBottom;
+                            resetChineseChess();
+                            renderChineseChess();
+                        }
+                    }
+                });
             }
         });
         actions.addView(restart, weightParams(1, chessActionHeight()));
@@ -471,11 +511,16 @@ public class MainActivity extends Activity implements GameClient.Listener {
         undo.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (online) {
-                    sendChessType("chessUndo");
-                } else {
-                    undoChineseChess();
-                }
+                confirmAction("确认悔棋？", "将回退到上一步棋。", "悔棋", new Runnable() {
+                    @Override
+                    public void run() {
+                        if (online) {
+                            sendChessType("chessUndo");
+                        } else {
+                            undoChineseChess();
+                        }
+                    }
+                });
             }
         });
         actions.addView(undo, weightParams(1, chessActionHeight()));
@@ -484,12 +529,7 @@ public class MainActivity extends Activity implements GameClient.Listener {
         back.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (online) {
-                    sendChessType("leaveRoom");
-                    chessSnapshot = null;
-                    resetChineseChess();
-                }
-                renderHome();
+                confirmReturnFromChess();
             }
         });
         actions.addView(back, weightParams(1, chessActionHeight()));
@@ -564,6 +604,33 @@ public class MainActivity extends Activity implements GameClient.Listener {
         String checkColor = room.optString("checkColor", "");
         String check = checkColor.length() > 0 ? "  ·  将军" : "";
         return "房间 " + code + "  ·  " + side + "回合  ·  " + mine + check;
+    }
+
+    private boolean chessRedAtBottom() {
+        JSONObject room = chessSnapshot == null ? null : chessSnapshot.optJSONObject("room");
+        if (room != null) {
+            if (playerId.equals(room.optString("blackPlayerId"))) {
+                return false;
+            }
+            return true;
+        }
+        return localChessRedAtBottom;
+    }
+
+    private int chessDisplayRow(int boardRow) {
+        return chessRedAtBottom() ? boardRow : 9 - boardRow;
+    }
+
+    private int chessDisplayCol(int boardCol) {
+        return chessRedAtBottom() ? boardCol : 8 - boardCol;
+    }
+
+    private int chessBoardRowFromDisplay(int displayRow) {
+        return chessRedAtBottom() ? displayRow : 9 - displayRow;
+    }
+
+    private int chessBoardColFromDisplay(int displayCol) {
+        return chessRedAtBottom() ? displayCol : 8 - displayCol;
     }
 
     private boolean isMyOnlineChessPiece(String piece, JSONObject room) {
@@ -1307,8 +1374,10 @@ public class MainActivity extends Activity implements GameClient.Listener {
             int actualHeight = cellY * 9;
             int left = (width - actualWidth) / 2;
             int top = Math.max(dp(6), Math.min((height - actualHeight) / 2, dp(28)));
-            int col = Math.round((event.getX() - left) / cellX);
-            int row = Math.round((event.getY() - top) / cellY);
+            int displayCol = Math.round((event.getX() - left) / cellX);
+            int displayRow = Math.round((event.getY() - top) / cellY);
+            int row = chessBoardRowFromDisplay(displayRow);
+            int col = chessBoardColFromDisplay(displayCol);
             handleChessTap(row, col);
             return true;
         }
@@ -1338,17 +1407,19 @@ public class MainActivity extends Activity implements GameClient.Listener {
             paint.setColor(Color.argb(160, 96, 52, 24));
             Paint.FontMetrics metrics = paint.getFontMetrics();
             float base = top + cellY * 4.5f - (metrics.ascent + metrics.descent) / 2;
-            canvas.drawText("楚河", left + cellX * 2.2f, base, paint);
-            canvas.drawText("汉界", left + cellX * 5.8f, base, paint);
+            canvas.drawText(chessRedAtBottom() ? "楚河" : "汉界", left + cellX * 2.2f, base, paint);
+            canvas.drawText(chessRedAtBottom() ? "汉界" : "楚河", left + cellX * 5.8f, base, paint);
         }
 
         private void drawSelectedPoint(Canvas canvas, int left, int top, int cellX, int cellY) {
             if (selectedChessRow < 0) {
                 return;
             }
+            int displayRow = chessDisplayRow(selectedChessRow);
+            int displayCol = chessDisplayCol(selectedChessCol);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.argb(120, 255, 236, 96));
-            canvas.drawCircle(left + selectedChessCol * cellX, top + selectedChessRow * cellY, cellX * 0.48f, paint);
+            canvas.drawCircle(left + displayCol * cellX, top + displayRow * cellY, cellX * 0.48f, paint);
         }
 
         private void drawMoveHints(Canvas canvas, int left, int top, int cellX, int cellY) {
@@ -1360,8 +1431,8 @@ public class MainActivity extends Activity implements GameClient.Listener {
                     if (!isLegalChineseChessMoveConsideringCheck(selectedChessRow, selectedChessCol, row, col)) {
                         continue;
                     }
-                    int cx = left + col * cellX;
-                    int cy = top + row * cellY;
+                    int cx = left + chessDisplayCol(col) * cellX;
+                    int cy = top + chessDisplayRow(row) * cellY;
                     String target = chessBoard[row][col];
                     paint.setStyle(Paint.Style.FILL);
                     paint.setColor(target == null ? Color.argb(170, 69, 139, 75) : Color.argb(145, 210, 48, 40));
@@ -1383,8 +1454,10 @@ public class MainActivity extends Activity implements GameClient.Listener {
                     if (piece == null) {
                         continue;
                     }
+                    int displayRow = chessDisplayRow(row);
+                    int displayCol = chessDisplayCol(col);
                     int lift = row == selectedChessRow && col == selectedChessCol ? Math.min(dp(18), cellY / 5) : 0;
-                    drawPiece(canvas, piece, left + col * cellX, top + row * cellY - lift, cellX, lift > 0);
+                    drawPiece(canvas, piece, left + displayCol * cellX, top + displayRow * cellY - lift, cellX, lift > 0);
                 }
             }
         }
